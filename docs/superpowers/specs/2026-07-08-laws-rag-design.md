@@ -56,22 +56,25 @@ This is a RAG (Retrieval-Augmented Generation) system: **retrieval** finds the r
 Two halves, running at different times:
 
 ```mermaid
-flowchart TB
-    subgraph offline["OFFLINE — ingestion script (TypeScript, runs locally per rulebook edition)"]
+flowchart LR
+    subgraph offline["OFFLINE — ingestion script (local)"]
+        direction TB
         A["Download IFAB PDF"] --> B["Parse + clean text"]
-        B --> C["Structure-aware chunking"]
+        B --> C["Chunk by law section"]
         C --> D["Embed chunks (Voyage)"]
-        D --> DB
     end
-    DB[("Supabase Postgres<br/>pgvector")]
-    subgraph online["ONLINE — Next.js app on Railway (every question)"]
+    subgraph online["ONLINE — Next.js on Railway"]
+        direction TB
         Q["Browser: POST /api/ask"] --> E["Embed question (Voyage)"]
-        E --> F["Hybrid search RPC<br/>top 8 chunks + scores"]
-        F --> G["Claude answers with<br/>native citations (streaming)"]
-        G --> R["Stream answer + citations<br/>+ glass-box data to browser"]
+        E --> F["Hybrid search RPC:<br/>top 8 chunks + scores"]
+        F --> G["Claude answer with<br/>native citations"]
+        G --> R["Streamed answer + citations<br/>+ glass-box panel data"]
     end
+    D --> DB[("Supabase Postgres<br/>pgvector")]
     DB -. "read-only" .-> F
 ```
+
+*(Offline pipeline runs per rulebook edition on the maintainer's machine; the deployed app only reads the database.)*
 
 The deployed app only **reads** the database. Ingestion runs locally; a bad ingestion run cannot break production.
 
