@@ -22,7 +22,7 @@ This is a RAG (Retrieval-Augmented Generation) system: **retrieval** finds the r
 - Conversation memory (each question is standalone)
 - Multiple rulebook editions live in the UI (schema supports it; UI shows one)
 - Non-English questions/answers
-- FM AI Scout (see §10)
+- FM AI Scout (see §11)
 
 ## 2. Corpus decision
 
@@ -55,21 +55,22 @@ This is a RAG (Retrieval-Augmented Generation) system: **retrieval** finds the r
 
 Two halves, running at different times:
 
-```
- OFFLINE (run per rulebook edition)               ONLINE (every question)
-┌──────────────────────────────────┐    ┌──────────────────────────────────────┐
-│  Ingestion script (TS, local)    │    │  Next.js app on Railway              │
-│  1. Download IFAB PDF            │    │  Browser ──► POST /api/ask           │
-│  2. Parse + clean text           │    │    1. Embed question (Voyage)        │
-│  3. Structure-aware chunking     │    │    2. Hybrid search (Supabase RPC)   │
-│  4. Embed chunks (Voyage)        │    │       → top 8 chunks + scores        │
-│  5. Upsert to Supabase ────────────┐  │    3. Claude answers with native     │
-└──────────────────────────────────┘ │  │       citations, streaming          │
-                                     ▼  │    4. Stream answer + citations +    │
-                              ┌─────────────┐  glass-box data to browser       │
-                              │  Supabase   │◄─┘                               │
-                              │  (pgvector) │                                  │
-                              └─────────────┘                                  │
+```mermaid
+flowchart TB
+    subgraph offline["OFFLINE — ingestion script (TypeScript, runs locally per rulebook edition)"]
+        A["Download IFAB PDF"] --> B["Parse + clean text"]
+        B --> C["Structure-aware chunking"]
+        C --> D["Embed chunks (Voyage)"]
+        D --> DB
+    end
+    DB[("Supabase Postgres<br/>pgvector")]
+    subgraph online["ONLINE — Next.js app on Railway (every question)"]
+        Q["Browser: POST /api/ask"] --> E["Embed question (Voyage)"]
+        E --> F["Hybrid search RPC<br/>top 8 chunks + scores"]
+        F --> G["Claude answers with<br/>native citations (streaming)"]
+        G --> R["Stream answer + citations<br/>+ glass-box data to browser"]
+    end
+    DB -. "read-only" .-> F
 ```
 
 The deployed app only **reads** the database. Ingestion runs locally; a bad ingestion run cannot break production.
@@ -139,9 +140,9 @@ Worst-case daily cost at ceiling: 500 × ~0.4¢ ≈ **$2/day**, plus Voyage free
 **Cost abuse:** covered by §8 (per-visitor limit + global ceiling + input cap).
 
 **Failure handling:**
-- Voyage or Claude API error → honest "something went wrong, try again shortly" + server-side log with request context. No silent failures.
-- Claude `stop_reason: "refusal"` (rare safety decline) → checked explicitly, clean fallback message.
-- Below-threshold retrieval → fixed off-topic response (also the wrong-domain answer, e.g. cricket questions).
+- If the Voyage or Claude API call fails, the user sees an honest "something went wrong, please try again shortly" message, and the error is logged server-side with enough request context to debug. No silent failures.
+- If Claude declines to answer for safety reasons (the API signals this with `stop_reason: "refusal"`), the code checks for it explicitly and shows a clean fallback message instead of crashing.
+- If no rulebook chunk scores above the relevance threshold, the app returns the fixed "I can only answer questions about the Laws of the Game" response. This covers both off-topic questions (cricket rules) and nonsense input, without spending a Claude call.
 
 **Secrets:** API keys (Voyage, Anthropic, Supabase service role) server-side env vars only; never in prompts, client code, or the repo. `gitleaks` in CI per the Node.js quality baseline.
 
