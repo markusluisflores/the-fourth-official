@@ -43,3 +43,6 @@ next-env.d.ts
 
 # screenshots (never committed — see workspace CLAUDE.md)
 *.png
+
+# Claude Code worktrees (harness-managed checkouts, never committed)
+/.claude/worktrees/
