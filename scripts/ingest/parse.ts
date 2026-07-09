@@ -8,6 +8,17 @@ import { extractText, getDocumentProxy } from "unpdf";
 // optional internal letter-spacing, and an optional trailing "| ..." breadcrumb.
 const RUNNING_HEADER = /^\d{0,4}\s*L\s*aws?\s+o\s*f\s+the\s+Game\s+\d{4}\/\d{2}\s*(\|.*)?$/i;
 
+// Chapter dividers in the live PDF render as "Law" and the bare chapter number on their
+// own consecutive lines (the spelled-out title is a stylized graphic, not extractable
+// text). This is the single, shared definition of "is this line pair a chapter
+// divider" — used by cleanText and truncateBackMatter below, and by chunk.ts's
+// splitByLaw, so the check can't silently diverge between call sites (e.g. one trimming
+// whitespace and the other not). Both lines are trimmed before comparing, since the
+// live PDF and hand-written test fixtures aren't guaranteed to be whitespace-clean.
+export function isLawDivider(lawLine: string, numberLine: string): boolean {
+  return lawLine.trim() === "Law" && /^\d{1,2}$/.test(numberLine.trim());
+}
+
 export function cleanText(raw: string): string {
   const lines = raw.replace(/\r\n/g, "\n").split("\n");
   const kept: string[] = [];
@@ -15,7 +26,7 @@ export function cleanText(raw: string): string {
     const t = lines[i].trim();
     // A bare 1-2 digit line right after a standalone "Law" line is a chapter divider's
     // number (e.g. "Law\n17"), not a page number — keep it so chunk.ts can find it.
-    const isLawDividerNumber = /^\d{1,2}$/.test(t) && kept[kept.length - 1]?.trim() === "Law";
+    const isLawDividerNumber = isLawDivider(kept[kept.length - 1] ?? "", lines[i]);
     if (/^\d{1,3}$/.test(t) && !isLawDividerNumber) continue; // bare page numbers
     if (RUNNING_HEADER.test(t)) continue; // running header (plain or PDF-mangled)
     kept.push(lines[i]);
@@ -25,10 +36,6 @@ export function cleanText(raw: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
-
-// Chapter dividers in the live PDF render as "Law" and the bare number on their own
-// consecutive lines (the spelled-out title is a stylized graphic, not extractable text).
-const LAW_DIVIDER = /^Law\n(\d{1,2})\s*$/gm;
 
 // After the last numbered Law's real content, the PDF continues straight into back
 // matter (VAR protocol, FIFA Quality Programme, Glossary, referee terms, practical
@@ -50,10 +57,21 @@ const BACK_MATTER_HEADER =
 const BACK_MATTER_TITLE = "Video\nassistant\nreferee (VAR)\nprotocol";
 
 export function truncateBackMatter(raw: string): string {
-  const dividers = [...raw.matchAll(LAW_DIVIDER)];
-  if (dividers.length === 0) return raw;
-  const lastDivider = dividers[dividers.length - 1];
-  const searchStart = lastDivider.index! + lastDivider[0].length;
+  // Find the char offset right after the last "Law\nN" divider's number line, via the
+  // same isLawDivider predicate splitByLaw uses in chunk.ts — a line-by-line scan
+  // rather than a regex, so there's exactly one definition of "divider" for both.
+  const lines = raw.split("\n");
+  let lastDividerEnd: number | null = null;
+  let lineStart = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const numberLine = lines[i + 1];
+    if (numberLine !== undefined && isLawDivider(lines[i], numberLine)) {
+      lastDividerEnd = lineStart + lines[i].length + 1 + numberLine.length;
+    }
+    lineStart += lines[i].length + 1;
+  }
+  if (lastDividerEnd === null) return raw;
+  const searchStart = lastDividerEnd;
   const tail = raw.slice(searchStart);
 
   const headerMatch = tail.match(BACK_MATTER_HEADER);

@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { createClient } from "@supabase/supabase-js";
 import { embedTexts } from "../../lib/voyage";
 import { pdfToText } from "./parse";
-import { chunkRulebook } from "./chunk";
+import { assertCompleteLawSet, chunkRulebook } from "./chunk";
 import { CORPUS_VERSION, EMBED_BATCH_SIZE, INSERT_BATCH_SIZE, PDF_PATH } from "./config";
 
 const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
@@ -13,6 +13,11 @@ async function main() {
   console.log(`parsed ${text.length} chars → ${chunks.length} chunks`);
   if (chunks.length < 100)
     throw new Error("suspiciously few chunks — check heading regexes against the live PDF");
+  // Divider detection has no semantic guard (any "Law" line followed by a bare 1-2 digit
+  // line is treated as a real chapter divider) — this is the backstop that catches a
+  // stray coincidental match (e.g. a table-of-contents entry) before it corrupts the
+  // corpus silently. See assertCompleteLawSet in chunk.ts.
+  assertCompleteLawSet(chunks);
 
   // The project's Voyage account has no payment method attached, capping it at 3 RPM
   // (see config.ts's EMBED_BATCH_SIZE comment). Back off between batches so we don't

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { chunkRulebook, MAX_CHUNK_CHARS } from "../scripts/ingest/chunk";
+import {
+  assertCompleteLawSet,
+  chunkRulebook,
+  MAX_CHUNK_CHARS,
+  type RawChunk,
+} from "../scripts/ingest/chunk";
 
 // The live PDF (extracted via unpdf, one page per array entry, joined with "\n") renders
 // each chapter divider as "Law" and the bare number on their own consecutive lines — the
@@ -86,5 +91,49 @@ describe("chunkRulebook", () => {
     // no content lost across the split
     expect(chunks.map((c) => c.content).join(" ")).toContain("Line 0 ");
     expect(chunks.map((c) => c.content).join(" ")).toContain("Line 99 ");
+  });
+});
+
+// Guards against Finding 1 from the Task 6 review: divider detection (both here and in
+// parse.ts) has no semantic guard — any "Law" line followed by a bare 1-2 digit line is
+// treated as a real chapter divider, with no range or ordering check. A coincidental
+// match anywhere in the real ~230-page document (a table-of-contents entry, an index
+// reference, a stray caption) would silently corrupt the corpus. assertCompleteLawSet is
+// the backstop, run from index.ts's main() after chunking, before embedding/upserting.
+describe("assertCompleteLawSet", () => {
+  const chunkFor = (lawNumber: number): RawChunk => ({
+    lawNumber,
+    breadcrumb: `Law ${lawNumber} › Introduction`,
+    content: "content",
+  });
+
+  it("does not throw when law numbers 1-17 are all present exactly once", () => {
+    const chunks = Array.from({ length: 17 }, (_, i) => chunkFor(i + 1));
+    expect(() => assertCompleteLawSet(chunks)).not.toThrow();
+  });
+
+  it("does not throw when a law has multiple chunks, as long as 1-17 are all present", () => {
+    const chunks = [
+      ...Array.from({ length: 17 }, (_, i) => chunkFor(i + 1)),
+      chunkFor(11),
+      chunkFor(11),
+    ];
+    expect(() => assertCompleteLawSet(chunks)).not.toThrow();
+  });
+
+  it("throws when a law number is missing", () => {
+    const chunks = Array.from({ length: 17 }, (_, i) => chunkFor(i + 1)).filter(
+      (c) => c.lawNumber !== 9,
+    );
+    expect(() => assertCompleteLawSet(chunks)).toThrow(/expected law numbers 1-17, got:/);
+  });
+
+  it("throws when an out-of-range law number is present (e.g. a coincidental divider match)", () => {
+    const chunks = [...Array.from({ length: 17 }, (_, i) => chunkFor(i + 1)), chunkFor(23)];
+    expect(() => assertCompleteLawSet(chunks)).toThrow(/expected law numbers 1-17, got:/);
+  });
+
+  it("throws with an empty chunk list", () => {
+    expect(() => assertCompleteLawSet([])).toThrow(/expected law numbers 1-17, got:/);
   });
 });

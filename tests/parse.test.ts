@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanText, truncateBackMatter } from "../scripts/ingest/parse";
+import { cleanText, isLawDivider, truncateBackMatter } from "../scripts/ingest/parse";
 
 describe("cleanText", () => {
   it("drops standalone page-number lines", () => {
@@ -47,6 +47,40 @@ describe("cleanText", () => {
   it("still drops a bare page-number line that does not follow 'Law'", () => {
     const raw = "Some rule text\n87\nMore text\nLaw\n17\nSection text.";
     expect(cleanText(raw)).toBe("Some rule text\nMore text\nLaw\n17\nSection text.");
+  });
+});
+
+// Guards against Finding 2 from the Task 6 review: this predicate is the single, shared
+// definition of "is this line pair a chapter divider" — used by both cleanText/
+// truncateBackMatter here and by chunk.ts's splitByLaw. Before consolidation, parse.ts's
+// LAW_DIVIDER regex required an exact, untrimmed "Law" line while chunk.ts's isDivider
+// trimmed first — a whitespace edge case neither test suite covered. These tests lock in
+// the trimming (more defensive) behavior for both lines.
+describe("isLawDivider", () => {
+  it("matches an exact 'Law' line followed by a bare 1-2 digit line", () => {
+    expect(isLawDivider("Law", "17")).toBe(true);
+    expect(isLawDivider("Law", "5")).toBe(true);
+  });
+
+  it("trims leading/trailing whitespace on the 'Law' line before comparing", () => {
+    expect(isLawDivider(" Law ", "17")).toBe(true);
+    expect(isLawDivider("Law\t", "17")).toBe(true);
+  });
+
+  it("trims leading/trailing whitespace on the number line before comparing", () => {
+    expect(isLawDivider("Law", " 17 ")).toBe(true);
+    expect(isLawDivider("Law", "17\t")).toBe(true);
+  });
+
+  it("rejects a 'Law' line that is not standalone", () => {
+    expect(isLawDivider("See also Law", "17")).toBe(false);
+    expect(isLawDivider("Lawful", "17")).toBe(false);
+  });
+
+  it("rejects a number line that is not a bare 1-2 digit number", () => {
+    expect(isLawDivider("Law", "123")).toBe(false);
+    expect(isLawDivider("Law", "17 offside")).toBe(false);
+    expect(isLawDivider("Law", "")).toBe(false);
   });
 });
 

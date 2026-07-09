@@ -1,3 +1,5 @@
+import { isLawDivider } from "./parse";
+
 export interface RawChunk {
   lawNumber: number;
   breadcrumb: string;
@@ -9,9 +11,28 @@ export const MAX_CHUNK_CHARS = 1500;
 // Chapter dividers in the live PDF (extracted via unpdf) render as "Law" and the bare
 // chapter number on their own consecutive lines — the spelled-out title is a stylized
 // graphic and isn't extractable as plain text, unlike the synthetic "LAW 11 OFFSIDE"
-// single-line fixture this regex originally targeted. See parse.ts's LAW_DIVIDER for the
-// matching truncateBackMatter boundary logic.
+// single-line fixture this regex originally targeted. See parse.ts's isLawDivider for
+// the shared divider-detection predicate, also used by truncateBackMatter's boundary
+// logic.
 const SECTION_HEADING = /^(\d{1,2})\.\s+(\S.*)$/;
+
+export const EXPECTED_LAW_NUMBERS = Array.from({ length: 17 }, (_, i) => i + 1);
+
+// The divider-detection regexes above have no semantic guard: any "Law" line
+// immediately followed by a bare 1-2 digit line (a stray table-of-contents entry, an
+// index reference, a coincidental caption) is treated as a real chapter divider with no
+// range or ordering check. This is the backstop — after chunking, assert the set of
+// distinct law numbers actually present is exactly {1..17}, no more, no fewer, so a
+// corrupted parse fails loudly instead of silently ingesting bad data.
+export function assertCompleteLawSet(chunks: RawChunk[]): void {
+  const lawNumbers = [...new Set(chunks.map((c) => c.lawNumber))].sort((a, b) => a - b);
+  const isComplete =
+    lawNumbers.length === EXPECTED_LAW_NUMBERS.length &&
+    lawNumbers.every((n, i) => n === EXPECTED_LAW_NUMBERS[i]);
+  if (!isComplete) {
+    throw new Error(`expected law numbers 1-17, got: ${lawNumbers.join(", ")}`);
+  }
+}
 
 export function chunkRulebook(text: string): RawChunk[] {
   const chunks: RawChunk[] = [];
@@ -35,11 +56,11 @@ function splitByLaw(text: string): { lawNumber: number; body: string }[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const nextLine = lines[i + 1]?.trim() ?? "";
-    const isDivider = line.trim() === "Law" && /^\d{1,2}$/.test(nextLine);
+    const rawNextLine = lines[i + 1] ?? "";
+    const isDivider = isLawDivider(line, rawNextLine);
     if (isDivider) {
       if (current) parts.push({ lawNumber: current.lawNumber, body: current.bodyLines.join("\n") });
-      current = { lawNumber: Number(nextLine), bodyLines: [] };
+      current = { lawNumber: Number(rawNextLine.trim()), bodyLines: [] };
       i++; // consume the number line too — it's part of the divider, not body content
     } else if (current) {
       current.bodyLines.push(line);
