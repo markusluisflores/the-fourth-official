@@ -1,0 +1,66 @@
+# CI — unit tests, lint, type check, dependency audit, and Next.js build.
+# Secrets required: none — this pipeline runs entirely against committed source
+#   and does not call Supabase, Voyage, or Anthropic APIs.
+# Manual trigger: gh workflow run ci.yml
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Vitest unit tests
+        run: npm test
+
+  lint-and-build:
+    name: Lint, type-check, audit, and build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Type-check the full project (tsc, not just what Next.js bundles)
+        run: npx tsc --noEmit
+
+      - name: Audit dependencies for high/critical CVEs
+        run: npm audit --audit-level=high
+
+      - name: Build Next.js app
+        run: npm run build
