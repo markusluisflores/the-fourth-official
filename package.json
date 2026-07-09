@@ -9,7 +9,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "ingest": "tsx --env-file=.env.local scripts/ingest/index.ts",
+    "ingest": "cross-env NODE_OPTIONS=--experimental-websocket tsx --env-file=.env.local scripts/ingest/index.ts",
     "eval": "tsx --env-file=.env.local evals/run-evals.ts",
     "prepare": "husky"
   },
@@ -27,6 +27,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "cross-env": "^10.1.0",
     "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
