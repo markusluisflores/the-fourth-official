@@ -192,7 +192,7 @@ Run: `npx tsx --env-file=.env.local scripts/probe-embedding-dim.ts` (requires a 
 **Interfaces:**
 - Produces: table `chunks(id, corpus_version, law_number, breadcrumb, content, embedding, fts)`; RPC `match_chunks(query_embedding vector, query_text text, match_count int, version text) → (id, law_number, breadcrumb, content, similarity, rrf_score)`.
 
-- [ ] **Step 1: Create the Supabase project** (free tier) named `laws-rag` via the Supabase MCP (`create_project`, confirm cost = $0) or dashboard. Put `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` into `.env.local`.
+- [ ] **Step 1: Create the Supabase project** (free tier) named `the-fourth-official` via the Supabase MCP (`create_project`, confirm cost = $0) or dashboard. Put `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` into `.env.local`.
 
 - [ ] **Step 2: Write `supabase/migrations/0001_chunks.sql`:**
 
