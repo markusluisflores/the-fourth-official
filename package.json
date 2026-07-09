@@ -10,7 +10,7 @@
     "lint": "eslint",
     "test": "vitest run",
     "ingest": "cross-env NODE_OPTIONS=--experimental-websocket tsx --env-file=.env.local scripts/ingest/index.ts",
-    "eval": "tsx --env-file=.env.local evals/run-evals.ts",
+    "eval": "cross-env NODE_OPTIONS=--experimental-websocket tsx --env-file=.env.local evals/run-evals.ts",
     "prepare": "husky"
   },
   "dependencies": {

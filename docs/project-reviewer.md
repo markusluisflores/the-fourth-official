@@ -120,7 +120,16 @@ A web app that settles football rules arguments by quoting the actual rulebook: 
 
 **The longer version:** `evals/golden-questions.json` labels each question with the section(s) a correct answer must cite. The eval script runs retrieval only (no generation — cheap and fast) and reports recall@8 and MRR. Every chunking/threshold/weight change gets measured against the same baseline. Deliberately no arbitrary target before a baseline exists.
 
-**Interview talking point:** "Before tuning anything I built a golden-question set — 30 questions labeled with the law sections a correct answer must draw from — and a script reporting recall@8 and MRR on retrieval alone. That turns 'I think the new chunking is better' into a number. It's the RAG equivalent of writing the test before the code, and it's cheap because it never calls the generation model."
+**Baseline (measured 2026-07-09, `npm run eval` against the live 118-chunk corpus, `corpus_version 2025-26`):**
+
+| Metric | Value |
+|---|---|
+| Recall@8 | **30/30 = 100.0%** |
+| MRR | **0.859** |
+
+All 30 golden questions were reviewed and approved by the project owner for football correctness before this run (including a correction to one of the original draft questions — the goalkeeper ball-holding rule now resolves to `Law 12 › 3` "Corner kick," reflecting the current 8-second/corner-kick rule, not the older indirect-free-kick sanction). Zero MISSes, so no retrieval-gap backlog exists yet from this eval set — the honest caveat is that a 100% score partly reflects that the golden questions were themselves written from the same chunk text retrieval searches over, so this baseline is a floor to defend, not proof the system handles messier real-world phrasing. `RELEVANCE_THRESHOLD = 0.35` was sanity-checked with an off-topic probe (a cricket-rules question) that returned `maxSimilarity ≈ 0.309`, correctly gated out by `isRelevant()`.
+
+**Interview talking point:** "Before tuning anything I built a golden-question set — 30 questions labeled with the law sections a correct answer must draw from — and a script reporting recall@8 and MRR on retrieval alone. That turns 'I think the new chunking is better' into a number. Baseline came back 100% recall@8 with an MRR of 0.859, which is a good sign for hybrid retrieval on a well-structured corpus, but I'm honest in interviews that a self-authored golden set has selection bias — the real test is how it holds up on phrasing I didn't write, which is the next iteration."
 
 ---
 
@@ -133,7 +142,8 @@ A web app that settles football rules arguments by quoting the actual rulebook: 
 
 ## Bugs & Lessons
 
-*(None yet — implementation hasn't started. This section fills in as retros and fixes accumulate.)*
+- **`npm run eval` needed the same Node 20 WebSocket flag as `npm run ingest`.** `@supabase/supabase-js` initializes a realtime client (even though nothing here uses realtime) that requires native WebSocket support; Node 20 needs `NODE_OPTIONS=--experimental-websocket`. The `ingest` script already had this wrapper; `eval` was missing it and failed outright on first run. Fixed by adding the same `cross-env NODE_OPTIONS=--experimental-websocket` wrapper.
+- **Voyage's free tier is 3 requests/minute without a payment method on file**, which the 30-question eval blows through in about 3 questions. `evals/run-evals.ts` got a small retry-with-backoff wrapper around `searchChunks` so a full eval run survives the free-tier ceiling end to end rather than dying on the fourth question's 429.
 
 ## Talking Points (quick index)
 
