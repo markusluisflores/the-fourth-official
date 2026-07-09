@@ -1,6 +1,6 @@
-# CI — unit tests, lint, type check, dependency audit, and Next.js build.
-# Secrets required: none — this pipeline runs entirely against committed source
-#   and does not call Supabase, Voyage, or Anthropic APIs.
+# CI — unit tests, lint, type check, dependency audit, secret scan, and Next.js build.
+# Secrets required: GITHUB_TOKEN (auto-provided by Actions; used by gitleaks-action to
+#   avoid API rate limits) — no external Supabase/Voyage/Anthropic secrets are used.
 # Manual trigger: gh workflow run ci.yml
 name: CI
 
@@ -18,6 +18,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  secret-scan:
+    name: Scan for leaked secrets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository (full history for gitleaks)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   test:
     name: Test
     runs-on: ubuntu-latest

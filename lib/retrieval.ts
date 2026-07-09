@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { CORPUS_VERSION } from "../scripts/ingest/config";
 import { embedTexts } from "./voyage";
 
 export interface RetrievedChunk {
@@ -35,6 +36,7 @@ export async function searchChunks(question: string, k = 8): Promise<RetrievalRe
     query_embedding: embedding,
     query_text: question,
     match_count: k,
+    version: CORPUS_VERSION,
   });
   if (error) throw new Error(`match_chunks failed: ${error.message}`);
   return resultFromRows((data ?? []) as RetrievedChunk[]);

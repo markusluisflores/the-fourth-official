@@ -1,11 +1,11 @@
 # Laws of the Game RAG — Project Reviewer & Interview Guide
 
 > **Living document.** Updated as new concepts are added or lessons are learned.
-> Last updated: 2026-07-08 (design phase — no code yet; everything below traces to `docs/superpowers/specs/2026-07-08-laws-rag-design.md`)
+> Last updated: 2026-07-09 (Part 1 — ingestion + retrieval — implemented and measured; baseline recall@8 100.0%, MRR 0.859 against the live 118-chunk corpus. Traces to `docs/superpowers/specs/2026-07-08-laws-rag-design.md`.)
 
 ---
 
-## What We Built (design approved 2026-07-08; implementation pending)
+## What We Built (design approved 2026-07-08; Part 1 implemented 2026-07-09)
 
 A web app that settles football rules arguments by quoting the actual rulebook: ask a rules question in plain English, get an answer grounded in the IFAB Laws of the Game with the exact law sections cited, plus a "glass-box" panel showing how the answer was retrieved (which passages matched, with what scores). First vector-embeddings project in the portfolio; deliberately scoped as a complete, finishable RAG system rather than a broad half-finished one.
 

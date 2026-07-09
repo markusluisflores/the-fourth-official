@@ -36,6 +36,13 @@ async function main() {
     console.log(`embedded ${Math.min(i + EMBED_BATCH_SIZE, chunks.length)}/${chunks.length}`);
   }
 
+  // Not wrapped in a transaction with the insert loop below. Safe today because: embeddings
+  // are computed above before this delete runs, so a Voyage failure leaves the DB untouched;
+  // the corpus is small enough (118 rows) to insert in a single INSERT_BATCH_SIZE batch, so
+  // there's no multi-batch insert that could fail halfway and leave the version half-written;
+  // and this script only ever runs manually, never against a live-serving path. If the corpus
+  // grows past one insert batch, or ingestion becomes automated/scheduled, wrap delete+insert
+  // in a transaction or a single RPC instead of relying on these assumptions.
   const { error: delError } = await supabase
     .from("chunks")
     .delete()

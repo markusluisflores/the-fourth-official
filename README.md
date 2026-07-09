@@ -1,5 +1,11 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## The Fourth Official
+
+A RAG app that answers football rules questions grounded in the IFAB Laws of the Game, with citations back to the exact law section.
+
+**Attribution:** the rulebook PDF in `data/` is © IFAB — included for non-commercial portfolio demonstration; this project is not affiliated with or endorsed by IFAB. See `data/README.md` for source and download details.
+
 ## Getting Started
 
 First, run the development server:
