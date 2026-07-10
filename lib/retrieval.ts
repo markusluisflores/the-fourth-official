@@ -1,5 +1,6 @@
-import { createClient } from "@supabase/supabase-js";
+import "server-only";
 import { CORPUS_VERSION } from "../scripts/ingest/config";
+import { serverSupabase } from "./supabase";
 import { embedTexts } from "./voyage";
 
 export interface RetrievedChunk {
@@ -31,8 +32,7 @@ export function isRelevant(result: RetrievalResult): boolean {
 
 export async function searchChunks(question: string, k = 8): Promise<RetrievalResult> {
   const [embedding] = await embedTexts([question], "query");
-  const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
-  const { data, error } = await supabase.rpc("match_chunks", {
+  const { data, error } = await serverSupabase().rpc("match_chunks", {
     query_embedding: embedding,
     query_text: question,
     match_count: k,
