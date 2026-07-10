@@ -1,0 +1,39 @@
+# CodeQL static application security testing (SAST)
+# Secrets required: none — uses the built-in GITHUB_TOKEN via the permissions block
+# Manual trigger: gh workflow run codeql.yml
+# Adjust the languages matrix if the project adds stacks beyond JS/TS.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "30 5 * * 1" # weekly Monday scan catches newly published query packs
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    name: Analyze code with CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL for ${{ matrix.language }}
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Run CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
