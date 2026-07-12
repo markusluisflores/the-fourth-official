@@ -15,6 +15,7 @@ export async function embedTexts(
       Authorization: `Bearer ${process.env.VOYAGE_API_KEY}`,
     },
     body: JSON.stringify({ model: EMBEDDING_MODEL, input: texts, input_type: inputType }),
+    signal: AbortSignal.timeout(30_000),
   });
   if (!res.ok) throw new Error(`Voyage API ${res.status}: ${await res.text()}`);
   const json = (await res.json()) as { data: { index: number; embedding: number[] }[] };
