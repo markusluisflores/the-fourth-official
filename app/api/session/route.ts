@@ -24,6 +24,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "invalid body" }, { status: 400 });
   }
 
+  // Known accepted limitation (Part 2a security review, 2026-07-12): no
+  // rate limit or lockout on password attempts here. Deferred rather than
+  // fixed — a brute-forced session grants nothing beyond what any
+  // legitimate visitor already has, since the global daily ceiling in
+  // /api/ask (not this gate) is the app's real spend boundary. Worst case
+  // is griefing the shared budget, not a security breach. Revisit if this
+  // ever needs a stronger guarantee than "fair-use gate."
   const secret = requireEnv("SESSION_SECRET");
   if (!(await passwordMatches(secret, password, requireEnv("DEMO_PASSWORD")))) {
     return NextResponse.json({ error: "wrong password" }, { status: 401 });

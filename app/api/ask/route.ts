@@ -16,11 +16,21 @@ const UPSTREAM_ERROR = "something went wrong, please try again shortly";
 
 const sse = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is not set`);
+  return value;
+}
+
 export async function POST(req: NextRequest): Promise<Response> {
   // Defense in depth: the middleware already gates /api/ask, but a matcher
-  // typo or config drift must not silently expose the paid path.
+  // typo or config drift must not silently expose the paid path. Same
+  // fail-closed requireEnv() pattern as middleware.ts and
+  // app/api/session/route.ts, rather than a non-null assertion, so a
+  // missing SESSION_SECRET throws instead of silently verifying against
+  // the literal string "undefined".
   const sessionOk = await verifySessionToken(
-    process.env.SESSION_SECRET!,
+    requireEnv("SESSION_SECRET"),
     req.cookies.get(SESSION_COOKIE)?.value,
   );
   if (!sessionOk) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
