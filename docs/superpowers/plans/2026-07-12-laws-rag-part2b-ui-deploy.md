@@ -1777,10 +1777,10 @@ Apply exactly these corrections (all from the PR #16 review / handoff):
 - [ ] **Step 3: Delete the consumed handoff**
 
 ```bash
-git rm NEXT-SESSION.md
+rm NEXT-SESSION.md
 ```
 
-(Its every item is now either shipped in this plan, recorded in memory (`part2b-deploy-blockers`), or explicitly parked — prompt-injection spec session and issue-spam triage remain in `vector-proj-goals` memory.)
+(The file is untracked — plain `rm`, not `git rm`. Its every item is now either shipped in this plan, recorded in memory (`part2b-deploy-blockers`), or explicitly parked — prompt-injection spec session and issue-spam triage remain in `vector-proj-goals` memory.)
 
 - [ ] **Step 4: Full gate + commit**
 
