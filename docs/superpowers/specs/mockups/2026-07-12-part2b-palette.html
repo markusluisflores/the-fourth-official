@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The Fourth Official — Part 2b Visual System (v2, decided)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: "Geist", Arial, sans-serif; padding: 32px; color: #171717; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  .sub { color: #666; font-size: 13px; margin-bottom: 24px; }
+  h2 { font-size: 15px; margin: 24px 0 10px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .card { width: 158px; border: 1px solid #e4e4e7; border-radius: 8px; overflow: hidden; }
+  .chip { height: 72px; }
+  .meta { padding: 8px 10px; font-size: 11.5px; line-height: 1.5; }
+  .meta b { display: block; font-size: 12.5px; }
+  .meta code { font-family: "Geist Mono", Consolas, monospace; color: #555; }
+  .panel { border-radius: 10px; padding: 18px 20px; margin-top: 10px; border: 1px solid #e4e4e7; }
+  .panel.dark { background: #0a0a0a; color: #ededed; border-color: #27272a; }
+  .crumb { font-family: "Geist Mono", Consolas, monospace; font-size: 12px; }
+  .panel p { font-size: 14px; line-height: 1.6; margin-top: 6px; }
+  .cite { font-family: "Geist Mono", Consolas, monospace; font-weight: 500; font-size: 12px; }
+  .light .cite { color: #15803D; } .dark .cite { color: #22C55E; }
+  .btn { display: inline-block; margin-top: 10px; padding: 8px 22px; border-radius: 6px; color: #fff; background: #15803D; font-size: 13.5px; font-weight: 600; }
+  .dark .btn { background: #22C55E; color: #052e16; }
+  .cardglyph { display: inline-block; width: 11px; height: 15px; border-radius: 2.5px; vertical-align: -2px; margin-right: 7px; transform: rotate(-8deg); }
+  .yc { background: #FACC15; } .rc { background: #DC2626; }
+  .msg { font-size: 12.5px; margin-top: 10px; }
+  .note { font-size: 11px; color: #888; margin-top: 26px; }
+</style>
+</head>
+<body>
+  <h1>The Fourth Official — Part 2b visual system <span style="font-size:13px;color:#15803D">✅ decided (Q5, 2026-07-12)</span></h1>
+  <div class="sub">Referee's kit: Swiss Modernism 2.0 · pitch-green single accent · card-shaped badges for warnings/errors · Geist Sans / Geist Mono. v2: yellow card revised from amber text (#B45309) to true-yellow badge fill (#FACC15) per Markus.</div>
+
+  <h2>Core palette — light mode</h2>
+  <div class="row">
+    <div class="card"><div class="chip" style="background:#FFFFFF; border-bottom:1px solid #eee"></div><div class="meta"><b>Background</b><code>#FFFFFF</code></div></div>
+    <div class="card"><div class="chip" style="background:#171717"></div><div class="meta"><b>Foreground</b><code>#171717</code></div></div>
+    <div class="card"><div class="chip" style="background:#15803D"></div><div class="meta"><b>Pitch green — accent</b><code>#15803D</code> Ask button, links, citation markers</div></div>
+    <div class="card"><div class="chip" style="background:#FACC15"></div><div class="meta"><b>Yellow card — badge fill</b><code>#FACC15</code> warnings, rate limits. Fill only — never text color</div></div>
+    <div class="card"><div class="chip" style="background:#DC2626"></div><div class="meta"><b>Red card — badge fill</b><code>#DC2626</code> errors, refusals, wrong password</div></div>
+  </div>
+
+  <h2>Core palette — dark mode</h2>
+  <div class="row">
+    <div class="card"><div class="chip" style="background:#0A0A0A"></div><div class="meta"><b>Background</b><code>#0A0A0A</code></div></div>
+    <div class="card"><div class="chip" style="background:#EDEDED"></div><div class="meta"><b>Foreground</b><code>#EDEDED</code></div></div>
+    <div class="card"><div class="chip" style="background:#22C55E"></div><div class="meta"><b>Pitch green — accent</b><code>#22C55E</code> brighter variant for dark surfaces</div></div>
+    <div class="card"><div class="chip" style="background:#FACC15"></div><div class="meta"><b>Yellow card — badge fill</b><code>#FACC15</code> same fill both themes</div></div>
+    <div class="card"><div class="chip" style="background:#DC2626"></div><div class="meta"><b>Red card — badge fill</b><code>#DC2626</code> (#F87171 for error text on dark)</div></div>
+  </div>
+
+  <h2>In context — ruling card with card-badge semantics, both themes</h2>
+  <div class="panel light">
+    <span class="crumb">Law 15 › 1 &nbsp;The throw-in</span>
+    <p>No — a goal cannot be scored directly from a throw-in <span class="cite">[1]</span>.
+    If the ball enters the opponents' goal, play restarts with a goal kick <span class="cite">[1][2]</span>.</p>
+    <span class="btn">Ask</span>
+    <div class="msg"><span class="cardglyph yc"></span>You've used all 20 questions for today — come back tomorrow.</div>
+    <div class="msg"><span class="cardglyph rc"></span>something went wrong, please try again shortly</div>
+  </div>
+  <div class="panel dark">
+    <span class="crumb">Law 15 › 1 &nbsp;The throw-in</span>
+    <p>No — a goal cannot be scored directly from a throw-in <span class="cite">[1]</span>.
+    If the ball enters the opponents' goal, play restarts with a goal kick <span class="cite">[1][2]</span>.</p>
+    <span class="btn">Ask</span>
+    <div class="msg"><span class="cardglyph yc"></span>You've used all 20 questions for today — come back tomorrow.</div>
+    <div class="msg"><span class="cardglyph rc"></span>something went wrong, please try again shortly</div>
+  </div>
+
+  <div class="note">The card glyph is a small rounded portrait rectangle with a slight referee's-flourish tilt — message text stays in the normal foreground color (accessible in both themes); the badge fill carries the semantic color. If yellow-toned text is ever unavoidable in light mode, #A16207 is the AA fallback. Geist Sans for prose/UI; Geist Mono for the law register (breadcrumbs, markers, scores).</div>
+</body>
+</html>
