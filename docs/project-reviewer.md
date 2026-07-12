@@ -1,7 +1,7 @@
 # Laws of the Game RAG — Project Reviewer & Interview Guide
 
 > **Living document.** Updated as new concepts are added or lessons are learned.
-> Last updated: 2026-07-09 (Part 1 — ingestion + retrieval — implemented and measured; baseline recall@8 100.0%, MRR 0.859 against the live 118-chunk corpus. Traces to `docs/superpowers/specs/2026-07-08-laws-rag-design.md`.)
+> Last updated: 2026-07-12 (Part 1 — ingestion + retrieval — completed 2026-07-09. Part 2a — ask API, guardrails, gate calibration — completed 2026-07-12. Traces to `docs/superpowers/specs/2026-07-08-laws-rag-design.md`.)
 
 ---
 
@@ -19,6 +19,26 @@ A web app that settles football rules arguments by quoting the actual rulebook: 
 | Citations | Claude API native citations feature |
 | Testing | Vitest (unit) + custom retrieval-eval harness |
 | Hosting | Railway |
+
+---
+
+## Part 2a — Ask API, Guardrails & Gate Calibration (implemented 2026-07-12)
+
+Lifted Part 1's pure retrieval system into a public `/api/ask` route with password authentication, rate limiting (per-visitor + global ceiling), and a calibrated relevance gate to filter low-confidence matches before generation. Route returns Server-Sent Events for streaming answers with citations and glass-box retrieval-trace output.
+
+**Gate calibration** (Task 3 evals, live against 118-chunk corpus):
+- **On-topic floor** (golden questions): `maxSimilarity` of best match across 30 correctly-answered questions ranged 0.351–0.966, floor 0.351.
+- **Off-topic ceiling** (cricket/NBA/basketball probes): `maxSimilarity` for sport-adjacent questions ranged 0.309–0.493, ceiling 0.493.
+- **Chosen threshold:** `RELEVANCE_THRESHOLD = 0.35` (on-topic floor, not a midpoint). Rationale: the ranges don't cleanly separate; a soft gate alone can't reliably filter category drift. Accepted trade-off — a few adjacent-sport questions (e.g., cricket Q scoring 0.352, just above threshold) pass the gate and rely on the system prompt as a second line of defense (Claude correctly declined the cricket question via the `system_prompt` instruction to answer only football questions).
+- **Verification:** live testing on a real cricket question confirmed the gate behavior — low-confidence boundary cases do reach Claude, which correctly applies the domain boundary in the system prompt.
+
+**Paraphrase-tier recall** (colloquial re-phrasings of golden-question topics, measured against live corpus):
+- 10/10 questions correctly answered (100% recall@8)
+- MRR: 0.863 (vs. golden set's 30/30, MRR 0.859)
+- **Honest caveat:** this set, like the golden set, was authored for this project and doesn't represent truly unseen phrasing. This measures robustness to colloquial synonyms within domain expertise, not zero-shot domain transfer. Real-world validation would require field testing.
+
+**Citations & transparency:**
+This app uses Claude API's native `citations: {enabled: true}` document-block feature rather than prompt-engineered citation markers like `[1]`, `[2]`. Each citation arrives as a structured field (`cited_text`, `start_char_index`, `end_char_index`) tied to the retrieved chunk's index, not free text the model is asked to format. Consequence: the UI can trust citation locations exactly (no hallucinated markers), and the glass-box panel knows which retrieved chunks were actually used (by matching the citation document index to the retrieval trace). **Interview talking point:** "I used structural citations from the Claude API rather than asking the model to insert markers — a model-emitted marker can drop or be malformatted under load, but a structured response field can't be hallucinated."
 
 ---
 
