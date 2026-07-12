@@ -6,8 +6,18 @@ interface Golden {
   expected: string[];
 }
 
+// Segment-aware prefix match: "Law 1" must match "Law 1 › ..." but never
+// "Law 11 › ..." (PR #1 review finding — bare startsWith was digit-prefix unsafe).
+export function matchesExpected(breadcrumb: string, expected: string): boolean {
+  return (
+    breadcrumb === expected ||
+    breadcrumb.startsWith(expected + " ") ||
+    breadcrumb.startsWith(expected + ".")
+  );
+}
+
 export function scoreQuestion(chunks: { breadcrumb: string }[], expected: string[]): number {
-  const idx = chunks.findIndex((c) => expected.some((e) => c.breadcrumb.startsWith(e)));
+  const idx = chunks.findIndex((c) => expected.some((e) => matchesExpected(c.breadcrumb, e)));
   return idx === -1 ? 0 : idx + 1;
 }
 
@@ -32,25 +42,69 @@ async function searchWithRetry(question: string, k: number, maxAttempts = 6) {
   throw new Error("unreachable");
 }
 
-async function main() {
-  const goldens: Golden[] = JSON.parse(await readFile("evals/golden-questions.json", "utf8"));
+interface AbstainQuestion {
+  question: string;
+}
+
+async function runGoldenSet(
+  label: string,
+  goldens: Golden[],
+): Promise<{ hits: number; mrrSum: number; maxSims: number[] }> {
   let hits = 0;
   let mrrSum = 0;
-
+  const maxSims: number[] = [];
   for (const g of goldens) {
-    const { chunks } = await searchWithRetry(g.question, 8);
-    const rank = scoreQuestion(chunks, g.expected);
+    const result = await searchWithRetry(g.question, 8);
+    maxSims.push(result.maxSimilarity);
+    const rank = scoreQuestion(result.chunks, g.expected);
     if (rank > 0) {
       hits += 1;
       mrrSum += 1 / rank;
     }
-    console.log(`${rank > 0 ? `hit@${rank}` : "MISS "}  ${g.question}`);
+    console.log(
+      `${rank > 0 ? `hit@${rank}` : "MISS "}  maxSim=${result.maxSimilarity.toFixed(3)}  ${g.question}`,
+    );
+  }
+  console.log(
+    `\n[${label}] recall@8: ${hits}/${goldens.length} = ${((hits / goldens.length) * 100).toFixed(1)}%` +
+      `  MRR: ${(mrrSum / goldens.length).toFixed(3)}`,
+  );
+  return { hits, mrrSum, maxSims };
+}
+
+async function main() {
+  const goldens: Golden[] = JSON.parse(await readFile("evals/golden-questions.json", "utf8"));
+  const paraphrases: Golden[] = JSON.parse(
+    await readFile("evals/paraphrase-questions.json", "utf8"),
+  );
+  const abstains: AbstainQuestion[] = JSON.parse(
+    await readFile("evals/abstain-questions.json", "utf8"),
+  );
+
+  console.log("=== Golden set (baseline defense) ===");
+  const golden = await runGoldenSet("golden", goldens);
+
+  console.log("\n=== Paraphrase set (informational — self-authored-bias gap) ===");
+  await runGoldenSet("paraphrase", paraphrases);
+
+  console.log("\n=== Abstain set (should be gated) ===");
+  const offTopicSims: number[] = [];
+  for (const a of abstains) {
+    const result = await searchWithRetry(a.question, 8);
+    offTopicSims.push(result.maxSimilarity);
+    console.log(`maxSim=${result.maxSimilarity.toFixed(3)}  ${a.question}`);
   }
 
+  const minOnTopic = Math.min(...golden.maxSims);
+  const maxOffTopic = Math.max(...offTopicSims);
+  console.log("\n=== Gate calibration ===");
+  console.log(`min on-topic maxSimilarity:  ${minOnTopic.toFixed(3)}`);
+  console.log(`max off-topic maxSimilarity: ${maxOffTopic.toFixed(3)}`);
   console.log(
-    `\nrecall@8: ${hits}/${goldens.length} = ${((hits / goldens.length) * 100).toFixed(1)}%`,
+    minOnTopic > maxOffTopic
+      ? `separable — midpoint threshold candidate: ${((minOnTopic + maxOffTopic) / 2).toFixed(3)}`
+      : "NOT separable — tiers overlap; flag to Markus before choosing a threshold",
   );
-  console.log(`MRR:      ${(mrrSum / goldens.length).toFixed(3)}`);
 }
 
 if (process.argv[1]?.endsWith("run-evals.ts")) {
