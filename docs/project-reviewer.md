@@ -158,3 +158,45 @@ All 30 golden questions were reviewed and approved by the project owner for foot
 9. Model right-sizing with an escape hatch and a harness to justify upgrades.
 10. Threat model: corpus control determines RAG injection risk; blast-radius reasoning.
 11. Evals-first tuning: recall@8/MRR baseline before any optimization.
+
+---
+
+## Part 2a Review & Part 2b Design (2026-07-12)
+
+> Appended at the end of the file on purpose: PR #16 (in flight) edits this file's
+> earlier sections, and overlapping edits on `main` would conflict at merge. Fold
+> these into their proper places during the next interview-prep capture pass.
+
+### The security call I didn't make: no login rate-limiter
+
+**The story:** `POST /api/session` has no lockout on password attempts — and the review's ruling was to *keep it that way*. Any per-IP attempt limiter would key on `x-forwarded-for`, which the client controls until the deploy platform's proxy chain is verified; a rate limiter built on an attacker-controlled key is security theater. The endpoint costs one HMAC per attempt (no paid API behind it), a brute-forced session grants nothing beyond what any visitor has, and spend is capped by the global daily ceiling regardless. The real mitigation is operational: a 32+-character random password, making guessing mathematically irrelevant.
+
+**Interview talking point:** "My favorite security decision in this project is one where I *refused* to add a control. A login rate-limiter would have keyed on a spoofable header — a lock made of the thing we don't trust. Security review isn't 'add more controls'; it's knowing which controls are load-bearing and which are theater. I documented the accepted risk, bounded it with the spend ceiling, and made the password's entropy the actual defense."
+
+### Bundled deploy blockers: why two fixes ship as one task
+
+**The story:** two real gaps — the per-visitor limit trusts a client-controllable header hop, and the global budget counter incremented even for rejected requests (one griefer could drain everyone's 500/day at zero cost). The counter fix is platform-independent and tempting to ship alone, but alone it's defeated by header rotation. Both were made one Mandatory-tier deploy-blocking task: verify Railway's trusted hop live (empirical probe, not guessed), then fix both.
+
+**Interview talking point:** "Two plausible-looking patches can individually be worthless: fixing the counter ordering without fixing IP trust just moves the griefing one header-rotation away. I bundled them into one deploy-blocking task, with the platform's actual proxy behavior verified by a live probe before the parsing code is written — the 'correct' forwarded-for hop is an empirical fact about the platform, not something you look up and hope."
+
+### UI identity: a reference desk, not a chat
+
+**The story:** the obvious genre for "type a question, watch the answer stream" is a chat transcript. Rejected on honesty grounds: the API is stateless — no memory, no follow-ups — and a chat costume advertises capability that doesn't exist. The ask screen frames each answer as a *ruling* with the cited law passages directly beneath, and same-visit history is a collapsed client-side list (re-reading a ruling is free; re-asking costs one of the visitor's 20 daily questions). Citation markers click-to-scroll rather than hover-preview — Perplexity's hover previews solve an off-screen-sources problem this layout doesn't have.
+
+**Interview talking point:** "The UI's job is to tell the truth about the system. A chat transcript would promise follow-up memory the API doesn't have, so I built a reference-desk instead: question in, ruling out, sources one glance below. Same reasoning killed hover previews for citations — that pattern exists because other products' sources are off-screen links; mine are already on the page. Copying genre conventions without asking what problem they solve is how UIs lie."
+
+### The yellow card that didn't look yellow
+
+**The story:** the palette maps referee semantics onto UI states — pitch-green accent, yellow-card warnings, red-card errors. First pass rendered "yellow card" as amber-brown text (`#B45309`), because true card yellow as *text* on white is unreadable (~1.5:1). The reviewer (Markus) rejected it on sight. The fix wasn't a different tint but a different role: a yellow card is a yellow *object*, so the color moved into a card-shaped badge fill (true `#FACC15`, dark text on it, ~12:1) with message text in the normal foreground.
+
+**Interview talking point:** "Accessibility constraints don't force ugly compromises if you ask which *role* a color plays. I couldn't make true yellow readable as text, so the yellow became a filled card-shaped badge — more literal to the domain *and* higher contrast than the amber compromise it replaced. When a color fails contrast, the answer is often 'stop using it as text,' not 'pick a muddier color.'"
+
+### Process engineering: the pipeline that swallowed a decision
+
+**The story (Claude Code workflow material):** the design-research tooling outputs exactly one recommended design system — and that single recommendation sailed into mockups as if it were a decision, until the user asked why he'd never been offered a color choice. Structured workflow had fixed one failure mode (skipping research) and quietly created another (research output consumed as decisions). Same session, two more gaps caught the same way: color swatches presented as `■ #hex` text lines are invisible as colors in a terminal (palettes now ship as rendered PDFs via headless Edge), and a subagent once committed to `main` because its dispatch prompt named the working directory only as prose (dispatch templates now require `pwd && git branch --show-current` as the literal first command). All three were patched at the source — skill files and global config — the same day.
+
+**Interview talking point:** "The recurring failure class in agentic workflows is rules that only conflict in situations nobody has hit yet — you can't find them by reading the rules, only by walking real scenarios through them. My working rule: when a human catches one, the fix goes into the skill or template that generated the behavior, that day — never into 'remembering to do better.' A workflow that improves by memory doesn't improve."
+
+### Part 2b design decisions (quick reference)
+
+Reference-desk ask screen · collapsed same-visit history (client-only) · click-to-scroll citations with highlight flash · glass box open on first answer, then user-controlled · referee's-kit palette v2 (card-shaped badge fills). Full record with rejected options: `docs/superpowers/specs/mockups/2026-07-12-part2b-ui-mockup.md`; spec: `docs/superpowers/specs/2026-07-12-laws-rag-part2b-ui-deploy-design.md`.
