@@ -39,6 +39,6 @@ $$;
 
 drop function if exists record_question(text);
 
-revoke execute on function record_question(text, int) from anon, authenticated;
-revoke execute on function match_chunks(vector, text, int, text) from anon, authenticated;
+revoke execute on function record_question(text, int) from public;
+revoke execute on function match_chunks(vector, text, int, text) from public;
 alter function match_chunks(vector, text, int, text) set search_path = public;
