@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useReducer, useRef } from "react";
-import { askReducer, initialAskState, type AskAction, type AskState } from "@/lib/ask-stream";
+import { askReducer, initialAskState, type AskState } from "@/lib/ask-stream";
 import { createSseParser } from "@/lib/sse-client";
+import { sseToAction } from "@/lib/sse-to-action";
 
 const NETWORK_ERROR = "something went wrong, please try again shortly";
 
@@ -69,24 +70,4 @@ export function useAskStream(): { state: AskState; ask: (question: string) => Pr
   }, []);
 
   return { state, ask };
-}
-
-function sseToAction(event: string, data: unknown): AskAction {
-  const d = data as Record<string, never>;
-  switch (event) {
-    case "meta":
-      return { type: "meta", chunks: d["chunks"], remaining: d["remaining"] };
-    case "text":
-      return { type: "text", delta: d["delta"] };
-    case "citation":
-      return { type: "citation", documentIndex: d["documentIndex"], citedText: d["citedText"] };
-    case "done":
-      return { type: "done", citedDocumentIndexes: d["citedDocumentIndexes"] };
-    case "refusal":
-      return { type: "refusal" };
-    case "error":
-      return { type: "stream_error", message: d["message"] };
-    default:
-      return { type: "stream_error", message: `unknown event: ${event}` };
-  }
 }
