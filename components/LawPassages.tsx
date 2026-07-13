@@ -1,6 +1,15 @@
 import type { CitedPassage } from "@/lib/ask-stream";
 
-export function LawPassages({ passages }: { passages: CitedPassage[] }) {
+export function LawPassages({
+  passages,
+  instanceId,
+}: {
+  passages: CitedPassage[];
+  // Scopes the DOM ids so citation-marker clicks land on the right list —
+  // LawPassages renders multiple times simultaneously (live answer + each
+  // expanded history entry), and passageNumber restarts at 1 every ask.
+  instanceId: string;
+}) {
   if (passages.length === 0) return null;
   return (
     <section>
@@ -11,7 +20,7 @@ export function LawPassages({ passages }: { passages: CitedPassage[] }) {
         {passages.map((p) => (
           <li
             key={p.passageNumber}
-            id={`passage-${p.passageNumber}`}
+            id={`passage-${instanceId}-${p.passageNumber}`}
             className="rounded transition-colors duration-300"
           >
             <span className="font-mono text-sm text-accent">[{p.passageNumber}]</span>{" "}

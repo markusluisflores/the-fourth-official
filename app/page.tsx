@@ -9,6 +9,7 @@ import { LawPassages } from "@/components/LawPassages";
 import { RemainingBadge } from "@/components/RemainingBadge";
 import { RulingCard } from "@/components/RulingCard";
 import { useAskStream } from "@/hooks/useAskStream";
+import type { AskState } from "@/lib/ask-stream";
 
 const TERMINAL = ["completed", "refused", "failed", "failed_partial", "gated"] as const;
 
@@ -18,8 +19,12 @@ export default function AskPage() {
   // Q4: glass box opens on the first answer of the visit; after the user
   // touches the toggle, their preference wins for the rest of the visit.
   const [glassOpen, setGlassOpen] = useState(true);
-  const userToggled = useRef(false);
-  const lastArchived = useRef<string | null>(null);
+  // Archive guard keyed on state *object identity*, not question text: a
+  // partial-fail archive and a later successful retry of the same question
+  // text are two distinct terminal AskState objects (the reducer's "submit"
+  // case always spreads a fresh initialAskState), so this still archives
+  // both instead of silently dropping the second one.
+  const lastArchived = useRef<AskState | null>(null);
 
   const busy = state.phase === "submitting" || state.phase === "streaming";
   const isTerminal = (TERMINAL as readonly string[]).includes(state.phase);
@@ -28,8 +33,8 @@ export default function AskPage() {
   useEffect(() => {
     if (!isTerminal) return;
     if (state.segments.length + state.chunks.length === 0) return;
-    if (lastArchived.current === state.question) return;
-    lastArchived.current = state.question;
+    if (lastArchived.current === state) return;
+    lastArchived.current = state;
     setHistory((h) => [{ question: state.question, state }, ...h]);
   }, [isTerminal, state]);
 
@@ -56,20 +61,21 @@ export default function AskPage() {
       )}
       {state.phase === "gated" && <p className="text-sm">{state.message}</p>}
 
-      <RulingCard segments={state.segments} streaming={state.phase === "streaming"} />
+      <RulingCard
+        segments={state.segments}
+        streaming={state.phase === "streaming"}
+        instanceId="live"
+      />
       {state.phase === "failed_partial" && (
         <CardBadge kind="red" message={`answer incomplete — ${state.message ?? ""}`} />
       )}
-      <LawPassages passages={state.passages} />
+      <LawPassages passages={state.passages} instanceId="live" />
       <GlassBox
         chunks={state.chunks}
         citedDocumentIndexes={state.citedDocumentIndexes}
         maxSimilarity={state.maxSimilarity}
         open={glassOpen}
-        onToggle={(open) => {
-          userToggled.current = true;
-          setGlassOpen(open);
-        }}
+        onToggle={setGlassOpen}
       />
 
       <HistoryList entries={history} />

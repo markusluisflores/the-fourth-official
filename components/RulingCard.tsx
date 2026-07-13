@@ -2,8 +2,8 @@
 
 import type { RulingSegment } from "@/lib/ask-stream";
 
-export function flashPassage(passageNumber: number) {
-  const el = document.getElementById(`passage-${passageNumber}`);
+export function flashPassage(instanceId: string, passageNumber: number) {
+  const el = document.getElementById(`passage-${instanceId}-${passageNumber}`);
   if (!el) return;
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   el.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "center" });
@@ -14,9 +14,13 @@ export function flashPassage(passageNumber: number) {
 export function RulingCard({
   segments,
   streaming,
+  instanceId,
 }: {
   segments: RulingSegment[];
   streaming: boolean;
+  // Scopes flashPassage's lookup to this instance's own LawPassages list —
+  // see the matching comment in LawPassages.tsx.
+  instanceId: string;
 }) {
   if (segments.length === 0 && !streaming) return null;
   return (
@@ -29,9 +33,9 @@ export function RulingCard({
           ) : (
             <button
               key={i}
-              onClick={() => flashPassage(seg.passageNumber)}
+              onClick={() => flashPassage(instanceId, seg.passageNumber)}
               aria-label={`Show cited passage ${seg.passageNumber}`}
-              className="mx-0.5 inline-block min-h-6 cursor-pointer px-1 font-mono text-sm font-medium text-accent"
+              className="mx-0.5 inline-block min-h-11 cursor-pointer px-1 font-mono text-sm font-medium text-accent"
             >
               [{seg.passageNumber}]
             </button>

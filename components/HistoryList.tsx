@@ -29,8 +29,12 @@ export function HistoryList({ entries }: { entries: HistoryEntry[] }) {
             </button>
             {openIndex === i && (
               <div className="mb-3 flex flex-col gap-4 pl-4">
-                <RulingCard segments={entry.state.segments} streaming={false} />
-                <LawPassages passages={entry.state.passages} />
+                <RulingCard
+                  segments={entry.state.segments}
+                  streaming={false}
+                  instanceId={`history-${i}`}
+                />
+                <LawPassages passages={entry.state.passages} instanceId={`history-${i}`} />
               </div>
             )}
           </li>
