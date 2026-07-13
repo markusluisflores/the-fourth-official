@@ -16,8 +16,12 @@ export interface UsageCounts {
 }
 
 export async function recordQuestion(supabase: SupabaseClient, key: string): Promise<UsageCounts> {
-  const { data, error } = await supabase.rpc("record_question", { visitor_key: key });
+  const { data, error } = await supabase.rpc("record_question", {
+    visitor_key: key,
+    visitor_limit: VISITOR_DAILY_LIMIT,
+  });
   if (error) throw new Error(`record_question failed: ${error.message}`);
   const row = (data as { visitor_count: number; global_count: number }[])[0];
+  if (!row) throw new Error("record_question returned no rows");
   return { visitorCount: row.visitor_count, globalCount: row.global_count };
 }

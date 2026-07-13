@@ -24,8 +24,23 @@ describe("recordQuestion", () => {
       error: null,
     });
     const counts = await recordQuestion(fakeClient(rpc), "some-key");
-    expect(rpc).toHaveBeenCalledWith("record_question", { visitor_key: "some-key" });
+    expect(rpc).toHaveBeenCalledWith("record_question", {
+      visitor_key: "some-key",
+      visitor_limit: 20,
+    });
     expect(counts).toEqual({ visitorCount: 3, globalCount: 41 });
+  });
+
+  it("passes the visitor limit to the RPC so the DB can gate the global increment", async () => {
+    const rpc = vi.fn().mockResolvedValue({
+      data: [{ visitor_count: 3, global_count: 41 }],
+      error: null,
+    });
+    await recordQuestion(fakeClient(rpc), "some-key");
+    expect(rpc).toHaveBeenCalledWith("record_question", {
+      visitor_key: "some-key",
+      visitor_limit: 20,
+    });
   });
 
   it("throws with context when the RPC errors", async () => {
