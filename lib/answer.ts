@@ -52,35 +52,42 @@ export async function* streamAnswer(
     ],
   });
 
-  const cited = new Set<number>();
-  for await (const event of stream) {
-    if (event.type !== "content_block_delta") continue;
-    if (event.delta.type === "text_delta") {
-      yield { type: "text", delta: event.delta.text };
-    } else if (event.delta.type === "citations_delta") {
-      const c = event.delta.citation;
-      if (c.type === "char_location") {
-        cited.add(c.document_index);
-        yield {
-          type: "citation",
-          documentIndex: c.document_index,
-          citedText: c.cited_text,
-          startCharIndex: c.start_char_index,
-          endCharIndex: c.end_char_index,
-        };
+  let finished = false;
+  try {
+    const cited = new Set<number>();
+    for await (const event of stream) {
+      if (event.type !== "content_block_delta") continue;
+      if (event.delta.type === "text_delta") {
+        yield { type: "text", delta: event.delta.text };
+      } else if (event.delta.type === "citations_delta") {
+        const c = event.delta.citation;
+        if (c.type === "char_location") {
+          cited.add(c.document_index);
+          yield {
+            type: "citation",
+            documentIndex: c.document_index,
+            citedText: c.cited_text,
+            startCharIndex: c.start_char_index,
+            endCharIndex: c.end_char_index,
+          };
+        }
       }
     }
-  }
 
-  const final = await stream.finalMessage();
-  if (final.stop_reason === "refusal") {
-    // Spec §9: explicit branch — the route shows clean fallback copy instead
-    // of a broken half-answer.
-    yield { type: "refusal" };
+    const final = await stream.finalMessage();
+    if (final.stop_reason === "refusal") {
+      // Spec §9: explicit branch — the route shows clean fallback copy instead
+      // of a broken half-answer.
+      yield { type: "refusal" };
+    }
+    finished = true;
+    yield {
+      type: "done",
+      citedDocumentIndexes: [...cited].sort((a, b) => a - b),
+      stopReason: final.stop_reason,
+    };
+  } finally {
+    // Consumer walked away (client disconnect) — stop paying for tokens.
+    if (!finished) stream.abort();
   }
-  yield {
-    type: "done",
-    citedDocumentIndexes: [...cited].sort((a, b) => a - b),
-    stopReason: final.stop_reason,
-  };
 }

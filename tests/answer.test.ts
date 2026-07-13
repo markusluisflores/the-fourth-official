@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type Anthropic from "@anthropic-ai/sdk";
 import { documentBlocks, streamAnswer, type AnswerEvent } from "../lib/answer";
 import type { RetrievedChunk } from "../lib/retrieval";
@@ -38,6 +38,7 @@ function fakeStream(events: unknown[], stopReason: string) {
       yield* events;
     },
     finalMessage: async () => ({ stop_reason: stopReason }),
+    abort: () => {},
   };
 }
 
@@ -117,5 +118,37 @@ describe("streamAnswer", () => {
       { type: "refusal" },
       { type: "done", citedDocumentIndexes: [], stopReason: "refusal" },
     ]);
+  });
+
+  it("aborts the underlying stream when the consumer stops early", async () => {
+    const abort = vi.fn();
+    const neverEnding = {
+      [Symbol.asyncIterator]: async function* () {
+        yield textDelta("first ");
+        yield textDelta("second ");
+        yield textDelta("third ");
+      },
+      finalMessage: async () => ({ stop_reason: "end_turn" }),
+      abort,
+    };
+    const client = { messages: { stream: () => neverEnding } } as unknown as Anthropic;
+    const gen = streamAnswer("q", chunks, client);
+    await gen.next(); // consume one event
+    await gen.return(undefined as never); // consumer walks away
+    expect(abort).toHaveBeenCalledOnce();
+  });
+
+  it("does not abort the stream after normal completion", async () => {
+    const abort = vi.fn();
+    const finite = {
+      [Symbol.asyncIterator]: async function* () {
+        yield textDelta("done");
+      },
+      finalMessage: async () => ({ stop_reason: "end_turn" }),
+      abort,
+    };
+    const client = { messages: { stream: () => finite } } as unknown as Anthropic;
+    await collect(streamAnswer("q", chunks, client));
+    expect(abort).not.toHaveBeenCalled();
   });
 });

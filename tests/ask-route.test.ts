@@ -141,4 +141,24 @@ describe("POST /api/ask", () => {
     expect(body).toContain("event: error");
     expect(body).toContain('"message":"something went wrong, please try again shortly"');
   });
+
+  it("stops consuming the generator when the client disconnects", async () => {
+    let generatorFinallyRan = false;
+    async function* slow(): AsyncGenerator<AnswerEvent> {
+      try {
+        yield { type: "text", delta: "a" };
+        yield { type: "text", delta: "b" };
+        yield { type: "text", delta: "c" };
+      } finally {
+        generatorFinallyRan = true;
+      }
+    }
+    streamAnswer.mockImplementation(() => slow());
+    const res = await post({ question: "when is a player offside?" });
+    const reader = res.body!.getReader();
+    await reader.read(); // meta
+    await reader.cancel();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(generatorFinallyRan).toBe(true);
+  });
 });

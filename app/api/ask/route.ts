@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { streamAnswer } from "@/lib/answer";
+import { MAX_QUESTION_CHARS } from "@/lib/constants";
 import {
   GLOBAL_DAILY_LIMIT,
   recordQuestion,
@@ -10,7 +11,6 @@ import { isRelevant, searchChunks } from "@/lib/retrieval";
 import { SESSION_COOKIE, verifySessionToken, VISITOR_COOKIE } from "@/lib/session";
 import { serverSupabase } from "@/lib/supabase";
 
-export const MAX_QUESTION_CHARS = 300;
 const GATED_MESSAGE = "I can only answer questions about the Laws of the Game.";
 const UPSTREAM_ERROR = "something went wrong, please try again shortly";
 
@@ -122,22 +122,34 @@ export async function POST(req: NextRequest): Promise<Response> {
   }
 
   const encoder = new TextEncoder();
+  let cancelled = false;
+  const gen = streamAnswer(question as string, retrieval.chunks);
   const stream = new ReadableStream({
     async start(controller) {
       try {
         controller.enqueue(encoder.encode(sse("meta", { chunks: retrieval.chunks, remaining })));
-        for await (const ev of streamAnswer(question as string, retrieval.chunks)) {
+        for await (const ev of gen) {
+          if (cancelled) break;
           controller.enqueue(encoder.encode(sse(ev.type, ev)));
         }
       } catch (err) {
-        console.error("generation failed mid-stream", {
-          question: (question as string).slice(0, 80),
-          err,
-        });
-        controller.enqueue(encoder.encode(sse("error", { message: UPSTREAM_ERROR })));
+        if (!cancelled) {
+          console.error("generation failed mid-stream", {
+            question: (question as string).slice(0, 80),
+            err,
+          });
+          controller.enqueue(encoder.encode(sse("error", { message: UPSTREAM_ERROR })));
+        }
       } finally {
-        controller.close();
+        if (cancelled) await gen.return(undefined as never);
+        else controller.close();
       }
+    },
+    async cancel() {
+      // Client disconnected: flag the loop; the generator's finally aborts
+      // the Anthropic stream (Task 2, lib/answer.ts).
+      cancelled = true;
+      await gen.return(undefined as never);
     },
   });
 
