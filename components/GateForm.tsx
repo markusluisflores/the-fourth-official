@@ -7,6 +7,7 @@ import { CardBadge } from "@/components/CardBadge";
 export function GateForm() {
   const router = useRouter();
   const passwordId = useId();
+  const errorId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -44,10 +45,7 @@ export function GateForm() {
   }
 
   return (
-    <form
-      onSubmit={submit}
-      className="flex w-full max-w-sm flex-col gap-4 rounded-xl border border-foreground/15 p-6 sm:p-8"
-    >
+    <form onSubmit={submit} className="flex w-full max-w-sm flex-col gap-4">
       <p className="text-sm text-foreground/70">This is a private demo.</p>
       <div className="flex flex-col gap-1.5">
         <label htmlFor={passwordId} className="text-sm font-medium">
@@ -65,6 +63,7 @@ export function GateForm() {
             autoFocus
             required
             aria-invalid={error ? true : undefined}
+            aria-describedby={error ? errorId : undefined}
             className="min-h-11 flex-1 rounded-md border border-foreground/20 bg-transparent px-3 text-base outline-none transition-colors focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent"
           />
           <button
@@ -76,7 +75,7 @@ export function GateForm() {
           </button>
         </div>
       </div>
-      {error && <CardBadge kind="red" message={error} />}
+      {error && <CardBadge id={errorId} kind="red" message={error} />}
     </form>
   );
 }
