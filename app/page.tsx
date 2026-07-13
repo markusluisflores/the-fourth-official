@@ -1,65 +1,78 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useEffect, useRef, useState } from "react";
+import { AskForm } from "@/components/AskForm";
+import { CardBadge } from "@/components/CardBadge";
+import { GlassBox } from "@/components/GlassBox";
+import { HistoryList, type HistoryEntry } from "@/components/HistoryList";
+import { LawPassages } from "@/components/LawPassages";
+import { RemainingBadge } from "@/components/RemainingBadge";
+import { RulingCard } from "@/components/RulingCard";
+import { useAskStream } from "@/hooks/useAskStream";
+
+const TERMINAL = ["completed", "refused", "failed", "failed_partial", "gated"] as const;
+
+export default function AskPage() {
+  const { state, ask } = useAskStream();
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  // Q4: glass box opens on the first answer of the visit; after the user
+  // touches the toggle, their preference wins for the rest of the visit.
+  const [glassOpen, setGlassOpen] = useState(true);
+  const userToggled = useRef(false);
+  const lastArchived = useRef<string | null>(null);
+
+  const busy = state.phase === "submitting" || state.phase === "streaming";
+  const isTerminal = (TERMINAL as readonly string[]).includes(state.phase);
+
+  // Q2: archive each finished Q&A into the visit history exactly once.
+  useEffect(() => {
+    if (!isTerminal) return;
+    if (state.segments.length + state.chunks.length === 0) return;
+    if (lastArchived.current === state.question) return;
+    lastArchived.current = state.question;
+    setHistory((h) => [{ question: state.question, state }, ...h]);
+  }, [isTerminal, state]);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <main className="mx-auto flex min-h-dvh w-full max-w-2xl flex-col gap-6 px-6 py-8">
+      <header className="flex items-baseline justify-between gap-4">
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">The Fourth Official</h1>
+          <p className="font-mono text-xs opacity-60">Laws of the Game 2025/26</p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+        <RemainingBadge remaining={state.remaining} />
+      </header>
+
+      <AskForm
+        busy={busy}
+        disabled={state.phase === "limited" && state.limitScope === "global"}
+        onAsk={ask}
+      />
+
+      {state.phase === "limited" && <CardBadge kind="yellow" message={state.message ?? ""} />}
+      {state.phase === "failed" && <CardBadge kind="red" message={state.message ?? ""} />}
+      {state.phase === "refused" && (
+        <CardBadge kind="red" message="The Fourth Official declined to answer that one." />
+      )}
+      {state.phase === "gated" && <p className="text-sm">{state.message}</p>}
+
+      <RulingCard segments={state.segments} streaming={state.phase === "streaming"} />
+      {state.phase === "failed_partial" && (
+        <CardBadge kind="red" message={`answer incomplete — ${state.message ?? ""}`} />
+      )}
+      <LawPassages passages={state.passages} />
+      <GlassBox
+        chunks={state.chunks}
+        citedDocumentIndexes={state.citedDocumentIndexes}
+        maxSimilarity={state.maxSimilarity}
+        open={glassOpen}
+        onToggle={(open) => {
+          userToggled.current = true;
+          setGlassOpen(open);
+        }}
+      />
+
+      <HistoryList entries={history} />
+    </main>
   );
 }
