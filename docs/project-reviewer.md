@@ -1,7 +1,7 @@
 # Laws of the Game RAG — Project Reviewer & Interview Guide
 
 > **Living document.** Updated as new concepts are added or lessons are learned.
-> Last updated: 2026-07-09 (Part 1 — ingestion + retrieval — implemented and measured; baseline recall@8 100.0%, MRR 0.859 against the live 118-chunk corpus. Traces to `docs/superpowers/specs/2026-07-08-laws-rag-design.md`.)
+> Last updated: 2026-07-12 (Part 1 — ingestion + retrieval — completed 2026-07-09. Part 2a — ask API, guardrails, gate calibration — completed 2026-07-12. Traces to `docs/superpowers/specs/2026-07-08-laws-rag-design.md`.)
 
 ---
 
@@ -19,6 +19,26 @@ A web app that settles football rules arguments by quoting the actual rulebook: 
 | Citations | Claude API native citations feature |
 | Testing | Vitest (unit) + custom retrieval-eval harness |
 | Hosting | Railway |
+
+---
+
+## Part 2a — Ask API, Guardrails & Gate Calibration (implemented 2026-07-12)
+
+Lifted Part 1's pure retrieval system into a public `/api/ask` route with password authentication, rate limiting (per-visitor + global ceiling), and a calibrated relevance gate to filter low-confidence matches before generation. Route returns Server-Sent Events for streaming answers with citations and glass-box retrieval-trace output.
+
+**Gate calibration** (Task 3 evals, live against 118-chunk corpus):
+- **On-topic floor** (golden questions): `maxSimilarity` of best match across 30 correctly-answered questions ranged 0.351–0.966, floor 0.351.
+- **Off-topic ceiling** (cricket/NBA/basketball probes, and non-sport controls): `maxSimilarity` for sport-adjacent questions ranged 0.309–0.493, ceiling 0.493.
+- **Chosen threshold:** `RELEVANCE_THRESHOLD = 0.35` (on-topic floor, not a midpoint). Rationale: the ranges don't cleanly separate; a soft gate alone can't reliably filter category drift. Accepted trade-off — a few adjacent-sport questions (e.g., cricket Q scoring 0.352, just above threshold) pass the gate and rely on the system prompt as a second line of defense (Claude correctly declined the cricket question via the `system_prompt` instruction to answer only football questions).
+- **Verification:** live testing on a real cricket question confirmed the gate behavior — low-confidence boundary cases do reach Claude, which correctly applies the domain boundary in the system prompt.
+
+**Paraphrase-tier recall** (colloquial re-phrasings of golden-question topics, measured against live corpus):
+- 10/10 questions correctly answered (100% recall@8)
+- MRR: 0.863 (vs. golden set's 30/30, MRR 0.859)
+- **Honest caveat:** this set, like the golden set, was authored for this project and doesn't represent truly unseen phrasing. This measures robustness to colloquial synonyms within domain expertise, not zero-shot domain transfer. Real-world validation would require field testing.
+
+**Citations & transparency:**
+This app uses Claude API's native `citations: {enabled: true}` document-block feature rather than prompt-engineered citation markers like `[1]`, `[2]`. Each citation arrives as a structured field (`cited_text`, `start_char_index`, `end_char_index`) tied to the retrieved chunk's index, not free text the model is asked to format. Consequence: the UI can trust citation locations exactly (no hallucinated markers), and the glass-box panel knows which retrieved chunks were actually used (by matching the citation document index to the retrieval trace). **Interview talking point:** "I used structural citations from the Claude API rather than asking the model to insert markers — a model-emitted marker can drop or be malformatted under load, but a structured response field can't be hallucinated."
 
 ---
 
@@ -127,7 +147,7 @@ A web app that settles football rules arguments by quoting the actual rulebook: 
 | Recall@8 | **30/30 = 100.0%** |
 | MRR | **0.859** |
 
-All 30 golden questions were reviewed and approved by the project owner for football correctness before this run (including a correction to one of the original draft questions — the goalkeeper ball-holding rule now resolves to `Law 12 › 3` "Corner kick," reflecting the current 8-second/corner-kick rule, not the older indirect-free-kick sanction). Zero MISSes, so no retrieval-gap backlog exists yet from this eval set — the honest caveat is that a 100% score partly reflects that the golden questions were themselves written from the same chunk text retrieval searches over, so this baseline is a floor to defend, not proof the system handles messier real-world phrasing. `RELEVANCE_THRESHOLD = 0.35` was sanity-checked with an off-topic probe (a cricket-rules question) that returned `maxSimilarity ≈ 0.309`, correctly gated out by `isRelevant()`.
+All 30 golden questions were reviewed and approved by the project owner for football correctness before this run (including a correction to one of the original draft questions — the goalkeeper ball-holding rule now resolves to `Law 12 › 3` "Corner kick," reflecting the current 8-second/corner-kick rule, not the older indirect-free-kick sanction). Zero MISSes, so no retrieval-gap backlog exists yet from this eval set — the honest caveat is that a 100% score partly reflects that the golden questions were themselves written from the same chunk text retrieval searches over, so this baseline is a floor to defend, not proof the system handles messier real-world phrasing. `RELEVANCE_THRESHOLD = 0.35` was sanity-checked with an off-topic probe (a cricket-rules question) that returned `maxSimilarity ≈ 0.309`, correctly gated out by `isRelevant()`. **Superseded:** this was an informal Part 1 spot-check, before the Part 2a threshold calibration existed and before Task 1's `match_chunks` fix changed how similarity is computed for every row. The authoritative number is the Part 2a calibration below (0.352, passes the gate).
 
 **Interview talking point:** "Before tuning anything I built a golden-question set — 30 questions labeled with the law sections a correct answer must draw from — and a script reporting recall@8 and MRR on retrieval alone. That turns 'I think the new chunking is better' into a number. Baseline came back 100% recall@8 with an MRR of 0.859, which is a good sign for hybrid retrieval on a well-structured corpus, but I'm honest in interviews that a self-authored golden set has selection bias — the real test is how it holds up on phrasing I didn't write, which is the next iteration."
 

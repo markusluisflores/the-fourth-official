@@ -1,5 +1,6 @@
-import { createClient } from "@supabase/supabase-js";
+import "server-only";
 import { CORPUS_VERSION } from "../scripts/ingest/config";
+import { serverSupabase } from "./supabase";
 import { embedTexts } from "./voyage";
 
 export interface RetrievedChunk {
@@ -16,7 +17,15 @@ export interface RetrievalResult {
   maxSimilarity: number;
 }
 
-export const RELEVANCE_THRESHOLD = 0.35; // starting point — tuned against evals (Task 8)
+// Calibrated 2026-07 (Task 3, 30 golden + 10 paraphrase + 6 abstain questions):
+// min on-topic maxSimilarity 0.351 vs max off-topic maxSimilarity 0.493 —
+// NOT cleanly separable (cricket/NBA/basketball probes overlap the low end of
+// real football questions). Deliberately set at the on-topic floor so no real
+// football question is ever wrongly gated; a handful of adjacent-sport
+// questions may pass through instead, relying on the system prompt's
+// "answer football questions only" instruction as the second line of
+// defense. Decision: Markus, 2026-07-12.
+export const RELEVANCE_THRESHOLD = 0.35;
 
 export function resultFromRows(rows: RetrievedChunk[]): RetrievalResult {
   return {
@@ -31,8 +40,7 @@ export function isRelevant(result: RetrievalResult): boolean {
 
 export async function searchChunks(question: string, k = 8): Promise<RetrievalResult> {
   const [embedding] = await embedTexts([question], "query");
-  const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
-  const { data, error } = await supabase.rpc("match_chunks", {
+  const { data, error } = await serverSupabase().rpc("match_chunks", {
     query_embedding: embedding,
     query_text: question,
     match_count: k,

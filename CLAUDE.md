@@ -28,19 +28,25 @@ Next.js (App Router, TypeScript, strict mode) · Supabase Postgres + pgvector ·
 
 ## Project phases
 
-- **Part 1 (this phase):** ingestion pipeline + hybrid retrieval + eval harness. No UI, no
-  API route, no guardrails yet.
-- **Part 2 (future):** `/api/ask` route, password gate, rate limiting/spend ceiling, citations
-  UI, deploy.
+- **Part 1 (complete):** ingestion pipeline + hybrid retrieval + eval harness.
+- **Part 2a (complete):** `/api/ask` route, password gate, rate limiting/spend ceiling,
+  calibrated relevance gate. Citations UI and deploy remain future work.
 
 ## File layout
 
 ```
-app/                      Next.js scaffold (untouched in Part 1)
-lib/                       shared logic — voyage.ts, retrieval.ts
+app/                       Next.js App Router
+  api/                       ask/ (question answering) and session/ (auth state)
+  layout.tsx / page.tsx      (bootstrap, deferred to Part 2b)
+middleware.ts              NextRequest auth validation + session check
+lib/                       shared logic — voyage.ts, retrieval.ts, answer.ts, auth.ts
 scripts/ingest/            offline ingestion CLI — config, parse, chunk, index
 scripts/probe-embedding-dim.ts  one-off Voyage dimension probe
-supabase/migrations/       schema + match_chunks hybrid-search RPC
+supabase/migrations/       schema + RPC + RLS
+  0001_chunks.sql          create extension, tables, match_chunks RPC
+  0002_match_chunks_similarity_fix.sql  boundary case fix
+  0003_chunks_rls.sql      RLS policies (deny all, server role excepted)
+  0004_usage_counters.sql  counter table + trigger, used by guardrails
 evals/                     golden-questions.json + run-evals.ts (recall@8, MRR)
 data/                      committed source PDF + attribution README
 tests/                     Vitest unit tests mirroring lib/ and scripts/
@@ -56,15 +62,23 @@ Global Constraints.
 - `npx tsc --noEmit` — full-project type check
 - `npm run dev` / `npm run build` — Next.js dev server / production build
 - `npm run ingest` — run the ingestion CLI against `.env.local` (parses the PDF, chunks,
-  embeds, upserts into Supabase)
-- `npm run eval` — run the retrieval eval harness against `.env.local`
+  embeds, upserts into Supabase). Uses `--conditions=react-server` to allow `server-only`
+  imports: the `server-only` package is harmless in Node scripts (resolves to a no-op via
+  the React server condition) but would fail without this flag.
+- `npm run eval` — run the retrieval eval harness against `.env.local`. Same `--conditions=react-server`
+  requirement as `ingest`.
 
 ## Secrets
 
-`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `VOYAGE_API_KEY` — local only, in `.env.local`
-(gitignored). Never in code, prompts, or commits. `.env.local.example` documents the required
-keys with empty values. `gitleaks` runs as a pre-commit hook and GitHub push protection is a
-second layer.
+**Development** (`.env.local`, gitignored): `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `VOYAGE_API_KEY`
+
+**Production** (Railway env vars): all of the above, plus `ANTHROPIC_API_KEY` (required for
+answer generation), `ANTHROPIC_MODEL` (optional; defaults to `claude-haiku-4-5` if
+unset), `DEMO_PASSWORD` (required; protect the public `/api/ask` route with a simple password),
+`SESSION_SECRET` (required; a long random string for signing session cookies).
+
+All secrets: never in code, prompts, or commits. `.env.local.example` documents the required keys
+with empty values. `gitleaks` runs as a pre-commit hook and GitHub push protection is a second layer.
 
 ## Risk tiers (per spec §12)
 
@@ -75,7 +89,8 @@ second layer.
 ## CI Runbook
 
 - `ci.yml` — Vitest tests (`test` job) + ESLint/`tsc --noEmit`/`npm audit`/Next.js build
-  (`lint-and-build` job). No secrets required. Manual trigger: `gh workflow run ci.yml`.
+  (`lint-and-build` job) + `gitleaks` secret scan (`secret-scan` job). No secrets required.
+  Manual trigger: `gh workflow run ci.yml`.
 - `codeql.yml` — CodeQL SAST on `javascript-typescript`, on every PR, push to `main`, and a
   weekly schedule. No secrets required (uses the built-in `GITHUB_TOKEN`). Manual trigger:
   `gh workflow run codeql.yml`.

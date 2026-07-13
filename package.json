@@ -9,15 +9,17 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "ingest": "cross-env NODE_OPTIONS=--experimental-websocket tsx --env-file=.env.local scripts/ingest/index.ts",
-    "eval": "cross-env NODE_OPTIONS=--experimental-websocket tsx --env-file=.env.local evals/run-evals.ts",
+    "ingest": "cross-env NODE_OPTIONS=\"--experimental-websocket --conditions=react-server\" tsx --env-file=.env.local scripts/ingest/index.ts",
+    "eval": "cross-env NODE_OPTIONS=\"--experimental-websocket --conditions=react-server\" tsx --env-file=.env.local evals/run-evals.ts",
     "prepare": "husky"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.110.0",
     "@supabase/supabase-js": "^2.109.0",
     "next": "16.2.10",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "server-only": "^0.0.1",
     "unpdf": "^1.6.2"
   },
   "devDependencies": {
@@ -28,7 +30,6 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "cross-env": "^10.1.0",
-    "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
     "husky": "^9.1.7",

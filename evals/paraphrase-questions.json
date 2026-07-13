@@ -1,0 +1,12 @@
+[
+  { "question": "Can the keeper just hold onto the ball forever?", "expected": ["Law 12 › 3"] },
+  { "question": "My mate says you can't be offside from a throw-in, is that true?", "expected": ["Law 11 › 3"] },
+  { "question": "Does a goal count if it goes in straight from a throw?", "expected": ["Law 15"] },
+  { "question": "Ball hit the ref and went in — does the goal stand?", "expected": ["Law 9"] },
+  { "question": "How many subs do you get in a normal league game?", "expected": ["Law 3 › 2"] },
+  { "question": "Is taping over your earrings enough or do they have to come off?", "expected": ["Law 4 › 1"] },
+  { "question": "Who decides how much stoppage time gets added on?", "expected": ["Law 7 › 3"] },
+  { "question": "Can you score an own goal directly from kick-off?", "expected": ["Law 8 › 1"] },
+  { "question": "Where does the penalty spot sit and who's allowed to touch the ball first?", "expected": ["Law 14 › 1"] },
+  { "question": "What happens if the keeper steps off his line early at a pen and it misses?", "expected": ["Law 14 › 2"] }
+]
