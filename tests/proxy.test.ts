@@ -42,4 +42,9 @@ describe("proxy", () => {
     expect(res.status).toBe(307);
     expect(res.headers.get("location")).toBe("http://localhost/gate");
   });
+
+  it("fails closed on /api/ask when SESSION_SECRET is unset", async () => {
+    vi.stubEnv("SESSION_SECRET", "");
+    await expect(request("/api/ask")).rejects.toThrow("SESSION_SECRET is not set");
+  });
 });
