@@ -53,3 +53,24 @@ describe("passwordMatches", () => {
     expect(await passwordMatches(SECRET, "HUNTER2", "hunter2")).toBe(false);
   });
 });
+
+describe("domain separation", () => {
+  it("rejects a token whose signature was computed without the session prefix", async () => {
+    // Simulate a pre-prefix (Part 2a) token: payload signed as raw string.
+    // We can't call the private hmac() directly, so recreate it inline.
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      "raw",
+      encoder.encode(SECRET),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    const payload = String(Date.now());
+    const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(payload)));
+    let bin = "";
+    for (const byte of sig) bin += String.fromCharCode(byte);
+    const legacySig = btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    expect(await verifySessionToken(SECRET, `${payload}.${legacySig}`)).toBe(false);
+  });
+});
