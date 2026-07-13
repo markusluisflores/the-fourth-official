@@ -143,22 +143,49 @@ describe("POST /api/ask", () => {
   });
 
   it("stops consuming the generator when the client disconnects", async () => {
+    // `generatorFinallyRan` alone can't distinguish correct cancel() wiring
+    // from a no-op one: Node's ReadableStream unconditionally closes the
+    // controller as soon as reader.cancel() is called, *before* it ever
+    // invokes our custom cancel() handler. So even with cancel() disabled,
+    // the very next controller.enqueue() throws, and the throw's abrupt
+    // completion of the `for await` loop implicitly calls gen.return() via
+    // the iterator-close protocol - the generator's finally still runs
+    // either way, just via a different path. What differs is *how* it gets
+    // there: a working cancel() flags `cancelled` so the loop breaks before
+    // attempting to enqueue, producing no error; a broken one lets the
+    // enqueue throw, which the route's catch block reports as a genuine
+    // mid-stream failure ("generation failed mid-stream") even though the
+    // client just navigated away. That misreported error is the signal this
+    // test asserts on - it flips only when the fix's cancelled-flag/break
+    // wiring is actually in place.
+    //
+    // The real per-yield delay keeps the generator legitimately in flight
+    // (mid an internal await) at cancel time, so the assertion can't be
+    // satisfied by the mock racing to natural completion before cancel()
+    // even runs (the original defect this test is closing).
+    const YIELD_DELAY_MS = 100;
+    const POST_CANCEL_WAIT_MS = 150;
     let generatorFinallyRan = false;
     async function* slow(): AsyncGenerator<AnswerEvent> {
       try {
         yield { type: "text", delta: "a" };
+        await new Promise((r) => setTimeout(r, YIELD_DELAY_MS));
         yield { type: "text", delta: "b" };
+        await new Promise((r) => setTimeout(r, YIELD_DELAY_MS));
         yield { type: "text", delta: "c" };
       } finally {
         generatorFinallyRan = true;
       }
     }
     streamAnswer.mockImplementation(() => slow());
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const res = await post({ question: "when is a player offside?" });
     const reader = res.body!.getReader();
     await reader.read(); // meta
     await reader.cancel();
-    await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, POST_CANCEL_WAIT_MS));
     expect(generatorFinallyRan).toBe(true);
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });
