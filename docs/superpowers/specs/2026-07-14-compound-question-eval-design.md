@@ -153,8 +153,41 @@ Recorded so whoever builds it starts warm; supersede freely in its own spec.
   and the README line frames it as a documented boundary of a k=8 demo, not
   a defect.
 
+## Baseline (measured 2026-07-14, 118-chunk corpus, corpus_version 2025-26)
+
+| k | Full coverage | Mean coverage |
+|---|---|---|
+| 8 (production) | 3/9 | 0.64 |
+| 12 | 6/9 | 0.81 |
+| 16 | 6/9 | 0.81 |
+| 24 | 7/9 | 0.89 |
+
+Per-question detail lives in the eval output; questions missing sections at
+k=8: "What happens if everyone on a team gets a red card?" (missed Law 3 › 1,
+Law 7 › 5, Law 10 › 2 — the known Part 2b failure); "A defender deliberately
+punches the ball off the goal line to stop a goal — what happens?" (missed
+Law 12 › 1); "The ball bursts as it flies toward the goal and still crosses
+the line — is it a goal and how does play restart?" (missed Law 2 › 2);
+"During a penalty shoot-out, can an injured goalkeeper be replaced, and by
+whom?" (missed Law 3 › 2); "A defender fouls an attacker who was standing in
+an offside position but had not yet touched the ball — what does the referee
+award?" (missed Law 12 › 1); "Can a team make an extra substitution in extra
+time of a cup match, and what is the procedure for making it?" (missed
+Law 3 › 3).
+
+Decision-rule reading (§5): mixed result, not a single row — 7 of 9
+questions reach full coverage by k ≤ 24 (row 2: raising generation k is a
+cheaper option than decomposition for most compound questions), but 2
+questions never reach full coverage even at k=24 — notably the original red-card
+failure (stuck at 2/4 through k=24) and the shoot-out goalkeeper-replacement
+question (stuck at 1/2 through k=24) — for which row 1 applies: raising k
+alone would not have fixed the failure that motivated this spec, so
+decomposition (§6) remains the only real candidate for the hardest compound
+questions specifically.
+
 ## Revision history
 
 | Date | Change |
 |---|---|
 | 2026-07-14 | Initial spec — approved in-session (scope A: measure now, sketch fix). |
+| 2026-07-14 | Baseline recorded (post Markus review of the question batch). |
