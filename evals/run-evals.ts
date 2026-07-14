@@ -120,7 +120,7 @@ async function runCompoundSet(compounds: CompoundQuestion[]): Promise<void> {
     }
     console.log(`${cells.join("  ")}  ${c.question}`);
     if (missedAtProductionK.length > 0) {
-      console.log(`  missed@8: ${missedAtProductionK.join(" | ")}`);
+      console.log(`  missed@${COMPOUND_KS[0]}: ${missedAtProductionK.join(" | ")}`);
     }
   }
   console.log(`\n[compound] per-k summary (n=${compounds.length}):`);
