@@ -115,7 +115,7 @@ async function runCompoundSet(compounds: CompoundQuestion[]): Promise<void> {
       const agg = perK.get(k)!;
       agg.coverageSum += coverage;
       if (missed.length === 0) agg.full += 1;
-      if (k === 8) missedAtProductionK = missed;
+      if (k === COMPOUND_KS[0]) missedAtProductionK = missed;
       cells.push(`k=${k} ${c.required.length - missed.length}/${c.required.length}`);
     }
     console.log(`${cells.join("  ")}  ${c.question}`);
