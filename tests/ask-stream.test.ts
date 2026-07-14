@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { askReducer, initialAskState, type AskState, type GlassChunk } from "../lib/ask-stream";
+import {
+  askReducer,
+  historyEntryMessage,
+  initialAskState,
+  REFUSED_MESSAGE,
+  type AskState,
+  type GlassChunk,
+} from "../lib/ask-stream";
 
 const chunk = (id: number, breadcrumb: string): GlassChunk => ({
   id,
@@ -137,5 +144,41 @@ describe("askReducer", () => {
     ]);
     expect(s.phase).toBe("idle");
     expect(s.remaining).toBe(19);
+  });
+});
+
+describe("historyEntryMessage", () => {
+  it("returns the gate message for a gated entry", () => {
+    const s = run([
+      { type: "submit", question: "lbw?" },
+      {
+        type: "gated",
+        message: "I can only answer questions about the Laws of the Game.",
+        chunks: [chunk(1, "Law 11 › 1")],
+        maxSimilarity: 0.31,
+        remaining: { visitor: 18 },
+      },
+    ]);
+    expect(historyEntryMessage(s)).toBe("I can only answer questions about the Laws of the Game.");
+  });
+
+  it("returns the standard decline copy for a refused entry", () => {
+    const s = run([
+      { type: "submit", question: "q" },
+      { type: "meta", chunks: [chunk(1, "Law 15 › 1")], remaining: { visitor: 19 } },
+      { type: "text", delta: "should be discarded" },
+      { type: "refusal" },
+    ]);
+    expect(historyEntryMessage(s)).toBe(REFUSED_MESSAGE);
+  });
+
+  it("returns null for a completed entry", () => {
+    const s = run([
+      { type: "submit", question: "q" },
+      { type: "meta", chunks: [], remaining: { visitor: 19 } },
+      { type: "text", delta: "answer" },
+      { type: "done", citedDocumentIndexes: [] },
+    ]);
+    expect(historyEntryMessage(s)).toBeNull();
   });
 });
