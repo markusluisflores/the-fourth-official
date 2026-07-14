@@ -1,7 +1,7 @@
 # Laws of the Game RAG — Project Reviewer & Interview Guide
 
 > **Living document.** Updated as new concepts are added or lessons are learned.
-> Last updated: 2026-07-13 (Part 1 — ingestion + retrieval — completed 2026-07-09. Part 2a — ask API, guardrails, gate calibration — completed 2026-07-12. Part 2b — UI, guardrail hardening, Railway deploy — completed 2026-07-13, PR #27 open. Traces to `docs/superpowers/specs/2026-07-08-laws-rag-design.md`.)
+> Last updated: 2026-07-14 (Part 1 — ingestion + retrieval — completed 2026-07-09. Part 2a — ask API, guardrails, gate calibration — completed 2026-07-12. Part 2b — UI, guardrail hardening, Railway deploy — completed 2026-07-13; PR #27 approved by a fresh-context review and merged 2026-07-14. Traces to `docs/superpowers/specs/2026-07-08-laws-rag-design.md`.)
 
 ---
 
@@ -53,6 +53,8 @@ Shipped the app's first user-facing surface — a password gate and an ask scree
 **The trusted-IP fix, empirically verified live:** the deploy-blocking task from Part 2a's review (client-controllable `x-forwarded-for`) was closed by probing the actual deployed Railway app rather than trusting platform documentation or convention. See Concept 11 — the result reversed the original assumption.
 
 **Deployed:** https://the-fourth-official-production.up.railway.app. Eval regression after all changes: golden 30/30 (MRR 0.859), paraphrase 10/10 (MRR 0.863) — unchanged from Part 1/2a baseline, confirming the guardrail/UI work didn't touch retrieval behavior.
+
+**Merged 2026-07-14** after a fresh-context review (approve, no blockers — full review on PR #27). The review's two follow-up-sized findings were filed as prioritized issues (#30, #31) rather than left in the merged PR's comment thread; its rulings on the four open handoff questions (compound-question recall, verification sequencing, the XFF probe's validity, microcopy clarity) are recorded in the same review comment.
 
 ---
 
@@ -228,6 +230,16 @@ Closing it required a live probe against the deployed Railway app: send several 
 
 ---
 
+### 17. Server-only data access: denying a key that would have been "safe" (ADR-001)
+
+**Simple version:** The rulebook text in the database is public information — letting the web page read it directly would have been defensible. We denied it anyway: the browser has *no* path to the database at all, because the moment one exists, every usage limit and gate can be walked around.
+
+**The longer version:** ADR-001 weighed two options for database access. Option A: ship Supabase's anon key with read-only row-level-security policies on `chunks` — defensible, since the Laws of the Game aren't sensitive. Option B: server-only access — RLS enabled with **zero policies** (deny-all), no anon key generated anywhere, and every read going through the service-role key in modules guarded by `import "server-only"` so accidental inclusion in a client bundle fails at *build* time, not runtime. Option B won because the guardrails (per-visitor/global rate limits, the relevance gate, session auth) only hold if server code mediates every data access — a direct client-to-Supabase path would bypass all of them — and nothing in the app needed a client read, so the structural win cost zero functionality. The browser receives chunk data exclusively through `/api/ask`'s streamed response. The ADR names its own revisit trigger: a future public "browse the rulebook" page that skips the API would require explicit RLS policies in a new migration and a conscious reversal.
+
+**Interview talking point:** "My favorite kind of security decision is one that removes an attack surface instead of defending it. A read-only public key for non-sensitive rulebook text would have been perfectly defensible — I still said no, because my rate limits and relevance gate only exist in server code, and any direct browser-to-database path would route around them. Since no feature needed client reads, deny-all RLS with zero policies and a build-time `server-only` guard bought structural impossibility for free. The ADR also records what would change my mind, so the decision is revisitable instead of folklore."
+
+---
+
 ## Engineering Process
 
 - **Brainstorm-before-build:** the entire design (corpus, archetype, stack, guardrails, threat model) was settled and spec'd (`docs/superpowers/specs/2026-07-08-laws-rag-design.md`) before any code. Several ideas died cheaply in conversation instead of expensively in code — the FM-dataset-as-corpus idea was redirected in minutes.
@@ -236,12 +248,14 @@ Closing it required a live probe against the deployed Railway app: send several 
 - **Offline/online separation:** production only reads the DB; ingestion runs locally and is idempotent per corpus version — a bad ingestion run can't break the live site.
 - **Subagent-driven development at scale (Part 2b, 11 tasks):** each task got a fresh implementer with no memory of prior tasks' reasoning, a spec-compliance-and-quality review before being marked done, and fix-then-re-review loops where findings surfaced (four of eleven tasks needed at least one fix round). Ended with a Mandatory-tier battery beyond the per-task gates: a dedicated security review across the whole branch, an automated security scan, and a final whole-branch review on the most capable available model — the layer that caught Concept 15's cross-task bug.
 - **An incomplete verification step is treated as a blocker, not a footnote:** when a task's own manual-testing step couldn't be fully completed (a live interactive check was blocked by a credential-safety guard), the process learned mid-project to treat that as equivalent to a failed check requiring explicit resolution or human sign-off — not something to note in a report and let the next task quietly inherit.
+- **Post-merge findings become issues, not comment-thread memory:** the final PR's fresh-context review approved with two follow-up-sized defects, and the PR merged with them known. Each immediately became a labeled, prioritized GitHub issue (#30 P2, #31 P3) with root cause and fix shape, referencing the review. The principle: a merged PR's review thread is an archival record nobody re-reads for open work — the issue tracker is the work queue, so anything unfixed at merge time must cross over or it silently evaporates.
 
 ## Bugs & Lessons
 
 - **`npm run eval` needed the same Node 20 WebSocket flag as `npm run ingest`.** `@supabase/supabase-js` initializes a realtime client (even though nothing here uses realtime) that requires native WebSocket support; Node 20 needs `NODE_OPTIONS=--experimental-websocket`. The `ingest` script already had this wrapper; `eval` was missing it and failed outright on first run. Fixed by adding the same `cross-env NODE_OPTIONS=--experimental-websocket` wrapper.
 - **Voyage's free tier is 3 requests/minute without a payment method on file**, which the 30-question eval blows through in about 3 questions. `evals/run-evals.ts` got a small retry-with-backoff wrapper around `searchChunks` so a full eval run survives the free-tier ceiling end to end rather than dying on the fourth question's 429.
 - **A refusal could render as a blank screen instead of a decline message** — see Concept 15. Symptom: on a model refusal, the ruling area would show nothing instead of "The Fourth Official declined to answer that one." Root cause: the state machine's handling of the stream-completion event unconditionally overwrote whatever phase preceded it, including a just-set refusal phase, because the unit test for the refusal path had never included the completion event that always follows it in production. Fix: a one-line guard plus a corrected test asserting the real event order. Prevention takeaway: a reducer test that stops the action sequence one event early can pass while the real system is broken.
+- **A known retrieval limitation was documented instead of reactively patched.** Manual testing surfaced that a compound question touching four law sections at once ("what happens if everyone gets a red card?") outruns single-pass k=8 retrieval: the 8 retrieved chunks covered three of the four relevant laws, the answer cited what it retrieved with complete accuracy, but the passages needed to *fully* resolve the question didn't all make the cut. Verified directly against the live API (the missing chunks were absent from the top 8 for that query's embedding). Disposition, after review: not a bug to hot-patch — k=8 was calibrated by the eval harness, raising it dilutes every question's context to serve rare compound ones, and query decomposition is a real feature deserving its own design cycle. The limitation is documented, and compound multi-section questions are earmarked as a known-fail eval category to be added before any future retrieval change. Lesson: "the system answered accurately but incompletely, and we can prove exactly why" is a stronger position than a reflexive parameter bump nobody measured.
 
 ## Talking Points (quick index)
 
@@ -262,5 +276,8 @@ Closing it required a live probe against the deployed Railway app: send several 
 15. Accessible color needs the right role (a badge fill), not a duller shade.
 16. Fresh-context final review catches cross-task bugs per-task review structurally can't.
 17. Agentic-workflow process engineering: fixing rules at the source the day they're caught.
+18. Removing an attack surface beats defending it: deny-all RLS with zero client credentials (ADR-001).
+19. Known-limitation discipline: document and earmark eval cases for the compound-question recall gap instead of an unmeasured parameter bump.
+20. Post-merge review findings cross into the issue tracker or they evaporate.
 
 Full record of Part 2b's UI decisions (with rejected options): `docs/superpowers/specs/mockups/2026-07-12-part2b-ui-mockup.md`; design spec: `docs/superpowers/specs/2026-07-12-laws-rag-part2b-ui-deploy-design.md`.
