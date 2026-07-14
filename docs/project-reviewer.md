@@ -1,6 +1,7 @@
 # Laws of the Game RAG — Project Reviewer & Interview Guide
 
 > **Living document.** Updated as new concepts are added or lessons are learned.
+> New to vector/RAG vocabulary? The **Glossary** at the end of this file defines every term this project uses in plain English.
 > Last updated: 2026-07-14 (Part 1 — ingestion + retrieval — completed 2026-07-09. Part 2a — ask API, guardrails, gate calibration — completed 2026-07-12. Part 2b — UI, guardrail hardening, Railway deploy — completed 2026-07-13; PR #27 approved by a fresh-context review and merged 2026-07-14. Traces to `docs/superpowers/specs/2026-07-08-laws-rag-design.md`.)
 
 ---
@@ -281,3 +282,65 @@ Closing it required a live probe against the deployed Railway app: send several 
 20. Post-merge review findings cross into the issue tracker or they evaporate.
 
 Full record of Part 2b's UI decisions (with rejected options): `docs/superpowers/specs/mockups/2026-07-12-part2b-ui-mockup.md`; design spec: `docs/superpowers/specs/2026-07-12-laws-rag-part2b-ui-deploy-design.md`.
+
+---
+
+## Glossary — every term this project uses, in plain English
+
+> First vector project — these were all new words once. Each entry says what the term means in general AND what it specifically is in this project.
+
+### Vectors & retrieval
+
+- **Embedding / vector** — a list of numbers (here: produced by Voyage) that represents the *meaning* of a piece of text. Texts with similar meaning get numerically similar lists. "Vector" is just the math word for that list of numbers.
+- **Embedding model** — the AI model that turns text into those numbers. Ours is Voyage `voyage-4-lite`. Critical rule: numbers from different embedding models can't be compared — all chunks *and* all questions must go through the same model.
+- **Similarity (cosine similarity)** — a score for how close two embeddings are, roughly 0 (unrelated) to 1 (same meaning). Every retrieved chunk carries one; the relevance gate reads the best one.
+- **Vector search (semantic search)** — find the stored texts whose embeddings are closest to the question's embedding. Finds "restarting the app" when you asked about "rebooting" — but is weak on exact identifiers like "Law 11".
+- **Full-text (keyword) search** — classic word matching (Postgres built-in here). Strong exactly where vector search is weak: literal terms, names, numbers.
+- **Hybrid search** — run both of the above and merge the results. This project does it inside one SQL function (`match_chunks`).
+- **RRF (Reciprocal Rank Fusion)** — the merge formula for hybrid search: a document ranked high on *either* list scores well, computed from its rank positions (1st place is worth more than 5th), not its raw scores.
+- **k / top-k** — how many chunks retrieval returns. Ours is k=8: the 8 best-ranked chunks go to Claude. The compound-question work measures when 8 isn't enough.
+- **Chunk / chunking** — a slice of the source document, sized for retrieval. Ours are structure-aware: one chunk per numbered law section (118 chunks total), so every retrieved piece is a complete rule.
+- **Breadcrumb** — a chunk's human-readable address, like `Law 12 › 2. Indirect free kick`. Citations and eval labels are expressed in breadcrumbs.
+- **Corpus / corpus version** — the document collection being searched (here: one IFAB rulebook PDF), and its edition tag (`2025-26`) so a future season's rules can coexist without mixing.
+- **RAG (Retrieval-Augmented Generation)** — the overall pattern: *retrieve* relevant passages first, then have the model *generate* an answer using only those passages, with citations as receipts.
+- **Query decomposition** — the sketched-but-unbuilt fix for compound questions: use a cheap LLM call to split one multi-part question into simple sub-questions, retrieve for each, merge the results.
+- **HNSW** — the index type pgvector uses to make vector search fast (an approximate nearest-neighbor graph). Trade-off: approximate means it can occasionally miss, and filtering after an approximate search can degrade recall.
+- **pgvector** — the Postgres extension that adds a vector column type and similarity operators, letting the same database hold both the text and its embeddings.
+
+### Evals (measuring retrieval quality)
+
+- **Eval / eval harness** — an automated exam for the system: fixed questions with known correct answers, scored by a script (`npm run eval`), so "did my change help?" gets a number instead of a vibe.
+- **Golden set** — the 30 core exam questions, each labeled with the law section(s) a correct answer must come from. Its 30/30 score is the regression gate: any change that drops it is rejected.
+- **Recall@k** — "was a correct section anywhere in the top k results?" as a percentage across questions. Measures whether retrieval *found* the right material at all.
+- **MRR (Mean Reciprocal Rank)** — measures *where* the first correct result ranked: 1st place scores 1, 2nd scores ½, 3rd scores ⅓, averaged over all questions. High MRR means the right chunk isn't just present but near the top.
+- **Paraphrase tier** — the same topics as the golden set but asked in casual language, to check retrieval isn't just matching the rulebook's own vocabulary.
+- **Abstain set** — off-topic questions (cricket, NBA) the system *should refuse*. Used to calibrate the relevance gate.
+- **Relevance gate / `RELEVANCE_THRESHOLD`** — the pre-generation check: if the best retrieved similarity is below 0.35, don't call Claude at all — answer "I can only answer questions about the Laws of the Game." Saves money and blocks off-topic prompts before the model sees them.
+- **Calibration** — choosing that threshold from measured data (the lowest score any real football question got vs. the highest score any off-topic question got) instead of guessing.
+- **OR vs AND semantics** — golden questions count as answered if *any* expected section is found (OR). Compound questions are only fully answerable if *every* required section is found (AND) — which is why they needed their own tier and scoring function (`coverageScore`).
+- **Baseline** — the recorded "before" numbers every future change is compared against.
+- **Known-fail** — a test the current system is *expected* to fail, kept deliberately: it documents a limitation and will show progress if a fix ever lands.
+
+### Generation (the answering side)
+
+- **LLM / token** — the language model (Claude Haiku 4.5 here) and the word-fragments it reads and writes; API cost is per token, which is why retrieval sends 8 chunks, not the whole rulebook.
+- **System prompt** — standing instructions the model gets before the user's question (here: "answer only from the provided documents, football only"). The user's question deliberately goes in a separate message, never pasted into these instructions.
+- **Grounded generation** — the model answers from supplied documents, not from its own memory. The whole point of RAG.
+- **Native citations** — a Claude API feature (`citations: {enabled: true}`): the API itself returns which document supports each answer span as structured data, instead of hoping the model formats `[1]` markers correctly in its prose.
+- **SSE (Server-Sent Events) / streaming** — the answer arrives word-by-word over one long HTTP response as typed events (`meta`, `text`, `citation`, `refusal`, `done`, `error`) instead of one big blob at the end.
+- **Refusal** — the model declining to answer (a formal stop reason in the API). The UI has an explicit branch for it — the source of the "blank ruling" bug the whole-branch review caught.
+- **Prompt injection** — an attacker hiding instructions in text the model reads. In RAG the dangerous variant is instructions hidden *inside the documents* — structurally absent here because the corpus is one fixed official PDF nobody can write to.
+
+### Guardrails & infrastructure
+
+- **HMAC** — a cryptographic signature made with a secret key: anyone can *read* a signed value, but only the secret holder can *produce* a valid one. Our session cookies are `timestamp.HMAC(timestamp)` — stateless, no session table.
+- **Domain separation** — prefixing what you sign (`session:` vs `pw:`) so a signature created for one purpose can never be replayed for another, even with the same secret.
+- **Constant-time comparison** — comparing secrets in a way that takes the same time whether they match or not, so an attacker can't learn characters from response timing.
+- **Rate limiting / spend ceiling** — usage caps: 20 questions/day per visitor, 500/day globally. The global one is the spend ceiling — the worst-case daily API bill is bounded no matter what.
+- **RLS (Row Level Security)** — Postgres permissions at the row level. Ours is deny-all (enabled, zero policies): the database refuses direct reads entirely; only the server's privileged key gets through.
+- **Service-role key vs anon key** — Supabase's two credential tiers: the all-powerful server-side key (never leaves the server; guarded by `import "server-only"`) vs. the browser-safe public key (this project deliberately ships none — see ADR-001).
+- **RPC (in the Supabase sense)** — calling a SQL function by name from application code (`match_chunks`, `record_question`) instead of sending raw SQL. Both our retrieval and rate-limit logic live in DB functions so multi-step operations are atomic (can't be half-applied under concurrency).
+- **Migration** — a numbered SQL file (`0001`–`0005`) that changes the database schema, kept in git so the database's history is reviewable code like everything else.
+- **`x-forwarded-for` (XFF)** — the HTTP header that carries the client's IP through proxies. Which entry you can trust is platform-specific — the live probe that reversed our assumption (Concept 11) was about exactly this.
+- **Edge / proxy** — the platform's front door that requests pass through before your code (Railway's edge; Next.js's `proxy.ts` is our own in-app gate that checks the session cookie).
+- **Idempotent** — safe to run twice with the same end result. The ingestion pipeline is idempotent per corpus version: re-running it can't duplicate chunks.
