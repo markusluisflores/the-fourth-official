@@ -7,6 +7,12 @@ export const SESSION_MAX_AGE_S = 60 * 60 * 24 * 30; // 30 days
 
 const encoder = new TextEncoder();
 
+// Domain separation (PR #16 review): the same SESSION_SECRET signs both
+// session tokens and password comparisons — prefix the message so an HMAC
+// from one domain can never be replayed in the other.
+const SESSION_DOMAIN = "session:";
+const PASSWORD_DOMAIN = "pw:";
+
 async function hmac(secret: string, data: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     "raw",
@@ -32,7 +38,7 @@ function timingSafeEqual(a: string, b: string): boolean {
 
 export async function createSessionToken(secret: string, now = Date.now()): Promise<string> {
   const payload = String(now);
-  return `${payload}.${await hmac(secret, payload)}`;
+  return `${payload}.${await hmac(secret, SESSION_DOMAIN + payload)}`;
 }
 
 export async function verifySessionToken(
@@ -45,7 +51,7 @@ export async function verifySessionToken(
   if (dot <= 0) return false;
   const payload = token.slice(0, dot);
   const sig = token.slice(dot + 1);
-  if (!timingSafeEqual(sig, await hmac(secret, payload))) return false;
+  if (!timingSafeEqual(sig, await hmac(secret, SESSION_DOMAIN + payload))) return false;
   const issuedAt = Number(payload);
   if (!Number.isFinite(issuedAt)) return false;
   const ageMs = now - issuedAt;
@@ -60,5 +66,8 @@ export async function passwordMatches(
   submitted: string,
   actual: string,
 ): Promise<boolean> {
-  return timingSafeEqual(await hmac(secret, submitted), await hmac(secret, actual));
+  return timingSafeEqual(
+    await hmac(secret, PASSWORD_DOMAIN + submitted),
+    await hmac(secret, PASSWORD_DOMAIN + actual),
+  );
 }

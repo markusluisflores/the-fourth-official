@@ -3,24 +3,39 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --accent: #15803d;
+  --accent-contrast: #ffffff;
+  --card-yellow: #facc15;
+  --card-red: #dc2626;
+  --error-text: #dc2626;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --background: #0a0a0a;
     --foreground: #ededed;
+    --accent: #22c55e;
+    --accent-contrast: #052e16;
+    --error-text: #f87171;
   }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-accent: var(--accent);
+  --color-accent-contrast: var(--accent-contrast);
+  --color-card-yellow: var(--card-yellow);
+  --color-card-red: var(--card-red);
+  --color-error: var(--error-text);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  /* Part 2b fix: the scaffold hardcoded Arial here, overriding the Geist
+     variables layout.tsx already wires up. */
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
 }

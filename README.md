@@ -1,42 +1,37 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# The Fourth Official
 
-## The Fourth Official
+Football rules Q&A grounded in the IFAB **Laws of the Game** — ask a question in
+plain English, get a referee-neutral ruling that cites the exact law passages it
+rests on, streamed live, with a "How this answer was built" panel showing every
+retrieved passage, its similarity score, and whether the answer actually used it.
 
-A RAG app that answers football rules questions grounded in the IFAB Laws of the Game, with citations back to the exact law section.
+Built as a portfolio RAG project: hybrid retrieval (pgvector + Postgres full-text,
+fused with RRF) over the official rulebook, Claude with native citations for
+generation, and measured evals (recall@8, MRR, gate calibration) behind every
+tuning decision.
 
-**Attribution:** the rulebook PDF in `data/` is © IFAB — included for non-commercial portfolio demonstration; this project is not affiliated with or endorsed by IFAB. See `data/README.md` for source and download details.
+## Stack
 
-## Getting Started
+Next.js (App Router) · Supabase Postgres + pgvector · Voyage `voyage-4-lite`
+embeddings · Claude Haiku 4.5 with `citations: {enabled: true}` · Vitest · Railway.
 
-First, run the development server:
+## How it works
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+1. **Ingestion (offline):** the official PDF is parsed, cleaned, and chunked along
+   the rulebook's own structure (law → section), embedded, and upserted into
+   Supabase (`npm run ingest`).
+2. **Retrieval:** one SQL RPC runs vector + keyword search and merges rankings
+   with Reciprocal Rank Fusion; a calibrated relevance gate abstains on off-topic
+   questions before any generation spend.
+3. **Generation:** retrieved chunks go to Claude as document blocks with native
+   citations — the answer streams back with structured claim-to-passage links,
+   not prompt-glued markers.
+4. **Guardrails:** shared-password gate, per-visitor and global daily budgets
+   (atomic Postgres counters), 300-char input cap, deny-all RLS with server-only
+   data access (ADR-001).
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Development
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+`npm run dev` — needs `.env.local` (see `.env.local.example`). Tests: `npm test`.
+Retrieval evals: `npm run eval`. Full docs: `docs/` (design specs, plans, ADRs,
+session journal, interview guide).

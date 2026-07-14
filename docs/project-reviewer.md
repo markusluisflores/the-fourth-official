@@ -1,7 +1,7 @@
 # Laws of the Game RAG — Project Reviewer & Interview Guide
 
 > **Living document.** Updated as new concepts are added or lessons are learned.
-> Last updated: 2026-07-12 (Part 1 — ingestion + retrieval — completed 2026-07-09. Part 2a — ask API, guardrails, gate calibration — completed 2026-07-12. Traces to `docs/superpowers/specs/2026-07-08-laws-rag-design.md`.)
+> Last updated: 2026-07-13 (Part 1 — ingestion + retrieval — completed 2026-07-09. Part 2a — ask API, guardrails, gate calibration — completed 2026-07-12. Part 2b — UI, guardrail hardening, Railway deploy — completed 2026-07-13, PR #27 open. Traces to `docs/superpowers/specs/2026-07-08-laws-rag-design.md`.)
 
 ---
 
@@ -39,6 +39,20 @@ Lifted Part 1's pure retrieval system into a public `/api/ask` route with passwo
 
 **Citations & transparency:**
 This app uses Claude API's native `citations: {enabled: true}` document-block feature rather than prompt-engineered citation markers like `[1]`, `[2]`. Each citation arrives as a structured field (`cited_text`, `start_char_index`, `end_char_index`) tied to the retrieved chunk's index, not free text the model is asked to format. Consequence: the UI can trust citation locations exactly (no hallucinated markers), and the glass-box panel knows which retrieved chunks were actually used (by matching the citation document index to the retrieval trace). **Interview talking point:** "I used structural citations from the Claude API rather than asking the model to insert markers — a model-emitted marker can drop or be malformatted under load, but a structured response field can't be hallucinated."
+
+---
+
+## Part 2b — UI, Guardrail Hardening & Railway Deploy (implemented 2026-07-13)
+
+Shipped the app's first user-facing surface — a password gate and an ask screen — on top of Part 2a's frozen SSE API contract, plus a Mandatory-tier guardrail-hardening pass and a live Railway production deploy.
+
+**UI identity — reference desk, not chat:** each answer is framed as a *ruling* with cited law passages directly beneath it, not a chat transcript. Same-visit history is a collapsed client-side list; citation markers click-to-scroll-and-flash rather than hover-preview. See Concept 13 below for the reasoning.
+
+**Guardrail hardening:** HMAC domain separation (session vs. password signing no longer share replayable signature space), migration `0005` (closes a global-budget griefing path — see Concept 11 — and hardens RPC grants), Next.js 16 `proxy.ts` adoption with page-level auth gating, SSE stream abort on client disconnect (stop paying for tokens once nobody's listening).
+
+**The trusted-IP fix, empirically verified live:** the deploy-blocking task from Part 2a's review (client-controllable `x-forwarded-for`) was closed by probing the actual deployed Railway app rather than trusting platform documentation or convention. See Concept 11 — the result reversed the original assumption.
+
+**Deployed:** https://the-fourth-official-production.up.railway.app. Eval regression after all changes: golden 30/30 (MRR 0.859), paraphrase 10/10 (MRR 0.863) — unchanged from Part 1/2a baseline, confirming the guardrail/UI work didn't touch retrieval behavior.
 
 ---
 
@@ -153,17 +167,81 @@ All 30 golden questions were reviewed and approved by the project owner for foot
 
 ---
 
+### 11. Empirical platform verification: the XFF probe that reversed a security assumption
+
+**Simple version:** A prior review flagged that the app trusted a header a visitor could fake to dodge their daily question limit. The fix everyone assumes ("trust the last value in the chain") turned out to be backwards on this specific hosting platform — and the only way to find that out was to actually test it live, not read documentation or guess.
+
+**The longer version:** Part 2a's review found two related gaps that had to ship together: the per-visitor rate limit keyed on `x-forwarded-for`, a header a client can set to any value until you know which hop your hosting platform's proxy actually controls; and the global daily-spend counter incremented even for requests later rejected for exceeding the visitor's own cap (one griefer could burn the shared budget for everyone at zero cost, since fixing only the counter ordering without fixing IP trust is defeated by simply rotating the header). Both were bundled into one Mandatory-tier, deploy-blocking task rather than shipped separately, because either fix alone is worthless without the other.
+Closing it required a live probe against the deployed Railway app: send several requests with different (and absent) spoofed `x-forwarded-for` values from the same real machine, log what the server actually receives, and independently verify the machine's real public IP via two external IP-echo services. The result was the opposite of the assumed model — Railway's edge doesn't append the real client IP to whatever the client sends (making the last entry trustworthy, the common pattern); it **overwrites the header entirely** with the real IP as the *first* entry and appends its own internal hop after. None of four different spoofed values ever survived to the server. Practical result: there was no spoofing vector to defend against on this platform at all, but the extraction logic needed to read the first entry, not the last — the reverse of what the original review assumed. The fix was verified live end-to-end afterward: two database snapshots bracketing one extra production request showed the exact-same rate-limit counter row incrementing, confirming the same real client always resolves to the same key.
+
+**Interview talking point:** "A prior review flagged a header-trust gap and assumed the standard fix — trust the last hop in the forwarded-for chain. I didn't ship that. I put a temporary log line on the deployed app, sent it a handful of requests with different fake values, and checked what actually arrived against my own independently-verified IP. The platform turned out to overwrite the header entirely rather than appending to it, with the real IP landing first, not last — the exact opposite of the common assumption. The lesson isn't about that specific header; it's that a security control based on a platform behavior you haven't verified live is a guess wearing a control's clothing. I'd rather ship a probe than ship an assumption."
+
+---
+
+### 12. The security call I didn't make: no login rate-limiter
+
+**Simple version:** The obvious "secure" move — locking an account after too many wrong passwords — was rejected on purpose, because the lock would be keyed on something an attacker controls.
+
+**The longer version:** `POST /api/session` has no lockout on password attempts, and the review's ruling was to keep it that way. Any per-IP attempt limiter would key on the same `x-forwarded-for` header from Concept 11 — before that header's trust was verified, a rate limiter built on an attacker-controlled key is security theater, not a control. The endpoint costs one HMAC comparison per attempt (no paid API call sits behind it), a brute-forced session grants nothing beyond what any ordinary visitor already has, and total spend is capped by the global daily ceiling regardless of how many sessions exist. The actual mitigation is operational: a 32+ character random password (generated fresh for production, never reused from local development), making brute-forcing mathematically irrelevant rather than rate-limited.
+
+**Interview talking point:** "My favorite security decision in this project is one where I refused to add a control. A login rate-limiter would have keyed on a header I didn't yet know was trustworthy — a lock built from the thing you don't trust. Security review isn't 'add more controls,' it's knowing which controls are load-bearing and which are theater. I documented the accepted risk, bounded its blast radius with the spend ceiling, and made password entropy the real defense instead."
+
+---
+
+### 13. UI identity: a reference desk, not a chat
+
+**Simple version:** The obvious genre for "type a question, watch an answer stream in" is a chat transcript. That genre was rejected on honesty grounds — the API has no memory between questions, so a chat UI would visually promise a capability that doesn't exist.
+
+**The longer version:** The API is stateless: no conversation memory, no follow-up awareness. A chat transcript UI implies both. Instead, the ask screen frames each answer as a *ruling*, with the cited law passages directly beneath it — question in, verdict out, sources one glance away. Same-visit history is a collapsed, client-side-only list (re-reading an earlier ruling is free; re-asking a question costs one of the visitor's 20 daily questions, so the UI shouldn't make re-reading look like re-asking). Citation markers click-to-scroll-and-flash to their source passage rather than showing a hover preview — hover-preview patterns (e.g. Perplexity) exist to solve an off-screen-sources problem this single-page layout doesn't have.
+
+**Interview talking point:** "The UI's job is to tell the truth about the system underneath it. A chat transcript would promise conversational memory the API doesn't have, so I built a reference-desk layout instead — question in, ruling out, sources one glance below. The same reasoning killed a hover-preview affordance for citations: that pattern exists to solve an off-screen-sources problem, and my sources are already on the page. Copying a UI genre's conventions without asking what problem they actually solve is how an interface ends up lying about what the product does."
+
+---
+
+### 14. Accessible color needs the right role, not a duller shade
+
+**Simple version:** The color palette maps referee semantics onto the interface — a warning looks like a yellow card, an error like a red one. The first version of the yellow warning failed a basic readability check, and the fix wasn't a duller yellow, it was putting the yellow somewhere else.
+
+**The longer version:** True "card yellow" as body text on a white background has a contrast ratio of roughly 1.5:1 — unreadable, and the first implementation shipped exactly that (an amber-brown compromise, `#B45309`, to make it legible). The reviewer rejected it on sight for not looking like a real yellow card. The actual fix changed which *role* the color played rather than its shade: a yellow card in real life is a small colored object, not colored text, so the true yellow (`#FACC15`) moved into a card-shaped badge fill with normal dark text on top of it — about 12:1 contrast, and closer to the domain metaphor besides.
+
+**Interview talking point:** "When a color fails a contrast check, the instinct is to mute it until it passes — I did that first, and it looked wrong to anyone who's actually seen a yellow card. The real fix was asking what *role* the color should play. True yellow can't be readable body text, but it's a perfectly good badge fill with dark text on top — more accurate to the domain and better contrast than the muted compromise it replaced. 'Stop using this color as text' is often the right answer where 'pick a duller version' just produces a worse compromise."
+
+---
+
+### 15. Fresh-context review catches what per-task review structurally can't
+
+**Simple version:** Ten sub-tasks were each built and reviewed individually and passed cleanly. A final, broader review — done by a reviewer who hadn't seen any single task's own reasoning — still found a real bug, because it was a bug in how two tasks' outputs interacted, not in either task alone.
+
+**The longer version:** One task built a state machine (a reducer) against its own specification; a later task built the UI against that reducer's existing, already-tested behavior. Both passed their own reviews. The actual defect only existed at the seam: the underlying generation function always emits a "done" event immediately after a "refusal" event, but the reducer's handling of "done" unconditionally overwrote whatever phase came before it — silently erasing the refusal state a moment after it was set. The reducer's own unit test for the refusal case had only exercised "refusal" in isolation, never followed by the "done" that always follows it in the real system, so a passing test coexisted with broken end-to-end behavior. A final review pass across the *entire* branch, from a fresh context with no attachment to either task's original diff, traced the real runtime event sequence and caught it; fixed with a one-line guard plus a corrected test asserting the actual sequence.
+
+**Interview talking point:** "Two components can each be individually correct and well-tested, and still be wrong together — that's the class of bug per-task or per-PR review structurally can't see, because neither task's own tests exercise the *other* task's real behavior. My mitigation was a mandatory final review pass across the whole branch, done by a reviewer with zero memory of either task's implementation, tracing actual runtime sequences rather than trusting each task's own passing tests. It caught a real defect — a refusal getting silently overwritten by the event that always follows it — that eleven individually-clean reviews had missed."
+
+---
+
+### 16. Process engineering: rules that only conflict in situations nobody has hit yet
+
+**Simple version:** Some workflow rules look complete when you read them, and only turn out to have a gap when a real, specific situation walks through them — you can't find those gaps by re-reading the rules, only by testing them against actual scenarios.
+
+**The longer version (Claude Code / agentic-workflow material):** Several instances of the same failure class surfaced across this project's build. In one design session, research tooling produced exactly one recommended design system, and that single recommendation flowed into mockups as if it were an already-made decision — until the person it was built for asked why he'd never actually been offered a color choice; a structured workflow had fixed one failure mode (skipping research) while quietly creating another (treating research output as a decision). In the same session, color swatches rendered as plain `■ #hex` text lines turned out to be invisible as colors in a terminal, and a sub-agent once committed code to the main branch because its dispatch instructions named the working directory only in prose rather than as a command to run and verify. Later, during this project's Part 2b build, the same class showed up twice more: an automated permission safeguard correctly blocked typing a test password into a browser-automation tool, but there was no way to mark that specific password as a disposable, non-production value safe for that purpose — so a legitimate verification step became stuck; and a UI label reading "15/20 today" was read by its first real user as "5 remaining" rather than "15 remaining," a genuinely ambiguous format that survived design research, an automated design-intelligence pass, implementation, and code review, because none of those steps' job is to read a shipped string with completely fresh eyes and ask if a stranger would misread it.
+
+**Interview talking point:** "The recurring failure class I've learned to watch for in agentic workflows is rules that only conflict in a situation nobody's hit yet — you can't find them by reading the rule, only by walking a real scenario through the whole pipeline and asking where it could have gone wrong. My practice is: the moment a human catches one, the fix goes into the source — the skill file, the review checklist, the dispatch template — the same day, never into 'remember to be more careful next time.' A workflow that only improves by memory doesn't actually improve; one where the fix lands in the artifact that generates the behavior does."
+
+---
+
 ## Engineering Process
 
 - **Brainstorm-before-build:** the entire design (corpus, archetype, stack, guardrails, threat model) was settled and spec'd (`docs/superpowers/specs/2026-07-08-laws-rag-design.md`) before any code. Several ideas died cheaply in conversation instead of expensively in code — the FM-dataset-as-corpus idea was redirected in minutes.
 - **Right-sized honesty:** the spec records that at ~1K chunks an in-memory search would technically suffice; pgvector was chosen to demonstrate the production pattern. Knowing (and saying) when a technology is overkill is part of the story.
 - **Risk tiering planned up front:** guardrail/auth code = Mandatory tier (full review stack incl. a dedicated security-reviewer agent), ingestion/retrieval/UI = Standard, copy/config = Routine.
 - **Offline/online separation:** production only reads the DB; ingestion runs locally and is idempotent per corpus version — a bad ingestion run can't break the live site.
+- **Subagent-driven development at scale (Part 2b, 11 tasks):** each task got a fresh implementer with no memory of prior tasks' reasoning, a spec-compliance-and-quality review before being marked done, and fix-then-re-review loops where findings surfaced (four of eleven tasks needed at least one fix round). Ended with a Mandatory-tier battery beyond the per-task gates: a dedicated security review across the whole branch, an automated security scan, and a final whole-branch review on the most capable available model — the layer that caught Concept 15's cross-task bug.
+- **An incomplete verification step is treated as a blocker, not a footnote:** when a task's own manual-testing step couldn't be fully completed (a live interactive check was blocked by a credential-safety guard), the process learned mid-project to treat that as equivalent to a failed check requiring explicit resolution or human sign-off — not something to note in a report and let the next task quietly inherit.
 
 ## Bugs & Lessons
 
 - **`npm run eval` needed the same Node 20 WebSocket flag as `npm run ingest`.** `@supabase/supabase-js` initializes a realtime client (even though nothing here uses realtime) that requires native WebSocket support; Node 20 needs `NODE_OPTIONS=--experimental-websocket`. The `ingest` script already had this wrapper; `eval` was missing it and failed outright on first run. Fixed by adding the same `cross-env NODE_OPTIONS=--experimental-websocket` wrapper.
 - **Voyage's free tier is 3 requests/minute without a payment method on file**, which the 30-question eval blows through in about 3 questions. `evals/run-evals.ts` got a small retry-with-backoff wrapper around `searchChunks` so a full eval run survives the free-tier ceiling end to end rather than dying on the fourth question's 429.
+- **A refusal could render as a blank screen instead of a decline message** — see Concept 15. Symptom: on a model refusal, the ruling area would show nothing instead of "The Fourth Official declined to answer that one." Root cause: the state machine's handling of the stream-completion event unconditionally overwrote whatever phase preceded it, including a just-set refusal phase, because the unit test for the refusal path had never included the completion event that always follows it in production. Fix: a one-line guard plus a corrected test asserting the real event order. Prevention takeaway: a reducer test that stops the action sequence one event early can pass while the real system is broken.
 
 ## Talking Points (quick index)
 
@@ -178,45 +256,11 @@ All 30 golden questions were reviewed and approved by the project owner for foot
 9. Model right-sizing with an escape hatch and a harness to justify upgrades.
 10. Threat model: corpus control determines RAG injection risk; blast-radius reasoning.
 11. Evals-first tuning: recall@8/MRR baseline before any optimization.
+12. Empirical platform verification: a live probe reversed an assumed proxy-trust model.
+13. Knowing which security controls are load-bearing vs. theater (the login-lockout non-fix).
+14. UI genre honesty: reference desk over chat, because the API has no memory.
+15. Accessible color needs the right role (a badge fill), not a duller shade.
+16. Fresh-context final review catches cross-task bugs per-task review structurally can't.
+17. Agentic-workflow process engineering: fixing rules at the source the day they're caught.
 
----
-
-## Part 2a Review & Part 2b Design (2026-07-12)
-
-> Appended at the end of the file on purpose: PR #16 (in flight) edits this file's
-> earlier sections, and overlapping edits on `main` would conflict at merge. Fold
-> these into their proper places during the next interview-prep capture pass.
-
-### The security call I didn't make: no login rate-limiter
-
-**The story:** `POST /api/session` has no lockout on password attempts — and the review's ruling was to *keep it that way*. Any per-IP attempt limiter would key on `x-forwarded-for`, which the client controls until the deploy platform's proxy chain is verified; a rate limiter built on an attacker-controlled key is security theater. The endpoint costs one HMAC per attempt (no paid API behind it), a brute-forced session grants nothing beyond what any visitor has, and spend is capped by the global daily ceiling regardless. The real mitigation is operational: a 32+-character random password, making guessing mathematically irrelevant.
-
-**Interview talking point:** "My favorite security decision in this project is one where I *refused* to add a control. A login rate-limiter would have keyed on a spoofable header — a lock made of the thing we don't trust. Security review isn't 'add more controls'; it's knowing which controls are load-bearing and which are theater. I documented the accepted risk, bounded it with the spend ceiling, and made the password's entropy the actual defense."
-
-### Bundled deploy blockers: why two fixes ship as one task
-
-**The story:** two real gaps — the per-visitor limit trusts a client-controllable header hop, and the global budget counter incremented even for rejected requests (one griefer could drain everyone's 500/day at zero cost). The counter fix is platform-independent and tempting to ship alone, but alone it's defeated by header rotation. Both were made one Mandatory-tier deploy-blocking task: verify Railway's trusted hop live (empirical probe, not guessed), then fix both.
-
-**Interview talking point:** "Two plausible-looking patches can individually be worthless: fixing the counter ordering without fixing IP trust just moves the griefing one header-rotation away. I bundled them into one deploy-blocking task, with the platform's actual proxy behavior verified by a live probe before the parsing code is written — the 'correct' forwarded-for hop is an empirical fact about the platform, not something you look up and hope."
-
-### UI identity: a reference desk, not a chat
-
-**The story:** the obvious genre for "type a question, watch the answer stream" is a chat transcript. Rejected on honesty grounds: the API is stateless — no memory, no follow-ups — and a chat costume advertises capability that doesn't exist. The ask screen frames each answer as a *ruling* with the cited law passages directly beneath, and same-visit history is a collapsed client-side list (re-reading a ruling is free; re-asking costs one of the visitor's 20 daily questions). Citation markers click-to-scroll rather than hover-preview — Perplexity's hover previews solve an off-screen-sources problem this layout doesn't have.
-
-**Interview talking point:** "The UI's job is to tell the truth about the system. A chat transcript would promise follow-up memory the API doesn't have, so I built a reference-desk instead: question in, ruling out, sources one glance below. Same reasoning killed hover previews for citations — that pattern exists because other products' sources are off-screen links; mine are already on the page. Copying genre conventions without asking what problem they solve is how UIs lie."
-
-### The yellow card that didn't look yellow
-
-**The story:** the palette maps referee semantics onto UI states — pitch-green accent, yellow-card warnings, red-card errors. First pass rendered "yellow card" as amber-brown text (`#B45309`), because true card yellow as *text* on white is unreadable (~1.5:1). The reviewer (Markus) rejected it on sight. The fix wasn't a different tint but a different role: a yellow card is a yellow *object*, so the color moved into a card-shaped badge fill (true `#FACC15`, dark text on it, ~12:1) with message text in the normal foreground.
-
-**Interview talking point:** "Accessibility constraints don't force ugly compromises if you ask which *role* a color plays. I couldn't make true yellow readable as text, so the yellow became a filled card-shaped badge — more literal to the domain *and* higher contrast than the amber compromise it replaced. When a color fails contrast, the answer is often 'stop using it as text,' not 'pick a muddier color.'"
-
-### Process engineering: the pipeline that swallowed a decision
-
-**The story (Claude Code workflow material):** the design-research tooling outputs exactly one recommended design system — and that single recommendation sailed into mockups as if it were a decision, until the user asked why he'd never been offered a color choice. Structured workflow had fixed one failure mode (skipping research) and quietly created another (research output consumed as decisions). Same session, two more gaps caught the same way: color swatches presented as `■ #hex` text lines are invisible as colors in a terminal (palettes now ship as rendered PDFs via headless Edge), and a subagent once committed to `main` because its dispatch prompt named the working directory only as prose (dispatch templates now require `pwd && git branch --show-current` as the literal first command). All three were patched at the source — skill files and global config — the same day.
-
-**Interview talking point:** "The recurring failure class in agentic workflows is rules that only conflict in situations nobody has hit yet — you can't find them by reading the rules, only by walking real scenarios through them. My working rule: when a human catches one, the fix goes into the skill or template that generated the behavior, that day — never into 'remembering to do better.' A workflow that improves by memory doesn't improve."
-
-### Part 2b design decisions (quick reference)
-
-Reference-desk ask screen · collapsed same-visit history (client-only) · click-to-scroll citations with highlight flash · glass box open on first answer, then user-controlled · referee's-kit palette v2 (card-shaped badge fills). Full record with rejected options: `docs/superpowers/specs/mockups/2026-07-12-part2b-ui-mockup.md`; spec: `docs/superpowers/specs/2026-07-12-laws-rag-part2b-ui-deploy-design.md`.
+Full record of Part 2b's UI decisions (with rejected options): `docs/superpowers/specs/mockups/2026-07-12-part2b-ui-mockup.md`; design spec: `docs/superpowers/specs/2026-07-12-laws-rag-part2b-ui-deploy-design.md`.

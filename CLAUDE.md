@@ -29,24 +29,28 @@ Next.js (App Router, TypeScript, strict mode) · Supabase Postgres + pgvector ·
 ## Project phases
 
 - **Part 1 (complete):** ingestion pipeline + hybrid retrieval + eval harness.
-- **Part 2a (complete):** `/api/ask` route, password gate, rate limiting/spend ceiling,
-  calibrated relevance gate. Citations UI and deploy remain future work.
+- **Part 2a (complete-and-merged):** `/api/ask` route, password gate, rate limiting/spend ceiling,
+  calibrated relevance gate.
+- **Part 2b (complete):** UI + Railway deploy.
 
 ## File layout
 
 ```
 app/                       Next.js App Router
   api/                       ask/ (question answering) and session/ (auth state)
-  layout.tsx / page.tsx      (bootstrap, deferred to Part 2b)
-middleware.ts              NextRequest auth validation + session check
-lib/                       shared logic — voyage.ts, retrieval.ts, answer.ts, auth.ts
+  gate/page.tsx              password gate screen
+  layout.tsx / page.tsx      metadata + the ask screen
+proxy.ts                   session gating: 401 for /api/ask, redirect to /gate for pages
+lib/                       shared logic — voyage.ts, retrieval.ts, answer.ts, session.ts, rate-limit.ts, supabase.ts, constants.ts, sse-client.ts, ask-stream.ts, glass-constants.ts
+components/ + hooks/       ask & gate UI (Part 2b)
 scripts/ingest/            offline ingestion CLI — config, parse, chunk, index
 scripts/probe-embedding-dim.ts  one-off Voyage dimension probe
 supabase/migrations/       schema + RPC + RLS
   0001_chunks.sql          create extension, tables, match_chunks RPC
   0002_match_chunks_similarity_fix.sql  boundary case fix
-  0003_chunks_rls.sql      RLS policies (deny all, server role excepted)
-  0004_usage_counters.sql  counter table + trigger, used by guardrails
+  0003_chunks_rls.sql      enable RLS on chunks (deny-all: zero policies; service role bypasses)
+  0004_usage_counters.sql  usage_counters table + record_question RPC
+  0005_guardrail_hardening.sql  counter ordering + RPC grants/search_path
 evals/                     golden-questions.json + run-evals.ts (recall@8, MRR)
 data/                      committed source PDF + attribution README
 tests/                     Vitest unit tests mirroring lib/ and scripts/
@@ -74,8 +78,8 @@ Global Constraints.
 
 **Production** (Railway env vars): all of the above, plus `ANTHROPIC_API_KEY` (required for
 answer generation), `ANTHROPIC_MODEL` (optional; defaults to `claude-haiku-4-5` if
-unset), `DEMO_PASSWORD` (required; protect the public `/api/ask` route with a simple password),
-`SESSION_SECRET` (required; a long random string for signing session cookies).
+unset), `DEMO_PASSWORD` (required; protect the public `/api/ask` route with a simple password —
+must be 32+ random chars in production), `SESSION_SECRET` (required; a long random string for signing session cookies).
 
 All secrets: never in code, prompts, or commits. `.env.local.example` documents the required keys
 with empty values. `gitleaks` runs as a pre-commit hook and GitHub push protection is a second layer.
