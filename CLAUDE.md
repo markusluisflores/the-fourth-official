@@ -38,7 +38,8 @@ Next.js (App Router, TypeScript, strict mode) · Supabase Postgres + pgvector ·
 ```
 app/                       Next.js App Router
   api/                       ask/ (question answering) and session/ (auth state)
-  layout.tsx / page.tsx      (bootstrap, deferred to Part 2b)
+  gate/page.tsx              password gate screen
+  layout.tsx / page.tsx      metadata + the ask screen
 proxy.ts                   session gating: 401 for /api/ask, redirect to /gate for pages
 lib/                       shared logic — voyage.ts, retrieval.ts, answer.ts, session.ts, rate-limit.ts, supabase.ts, constants.ts, sse-client.ts, ask-stream.ts, glass-constants.ts
 components/ + hooks/       ask & gate UI (Part 2b)
