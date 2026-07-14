@@ -21,6 +21,21 @@ export function scoreQuestion(chunks: { breadcrumb: string }[], expected: string
   return idx === -1 ? 0 : idx + 1;
 }
 
+// AND-semantics counterpart to scoreQuestion (which is OR: any expected
+// section counts). A compound question is fully answerable only if EVERY
+// required section has at least one chunk in the top-k. Spec:
+// docs/superpowers/specs/2026-07-14-compound-question-eval-design.md §4.
+export function coverageScore(
+  chunks: { breadcrumb: string }[],
+  required: string[],
+): { coverage: number; missed: string[] } {
+  const missed = required.filter((r) => !chunks.some((c) => matchesExpected(c.breadcrumb, r)));
+  return {
+    coverage: required.length === 0 ? 1 : (required.length - missed.length) / required.length,
+    missed,
+  };
+}
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Voyage's free tier (no payment method on file) is rate-limited to 3 requests/minute.
