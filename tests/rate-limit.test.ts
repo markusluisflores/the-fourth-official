@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { recordQuestion, visitorKey } from "../lib/rate-limit";
+import { recordQuestion, trustedClientIp, visitorKey } from "../lib/rate-limit";
 
 const fakeClient = (rpc: ReturnType<typeof vi.fn>) => ({ rpc }) as unknown as SupabaseClient;
 
@@ -14,6 +14,22 @@ describe("visitorKey", () => {
   it("differs when either ip or visitor id differs", () => {
     expect(visitorKey("1.2.3.4", "vis-1")).not.toBe(visitorKey("1.2.3.5", "vis-1"));
     expect(visitorKey("1.2.3.4", "vis-1")).not.toBe(visitorKey("1.2.3.4", "vis-2"));
+  });
+});
+
+describe("trustedClientIp", () => {
+  it("takes the leftmost entry — Railway's edge overwrites the client-supplied value with the real IP as the first entry, and appends its own internal hop(s) after", () => {
+    expect(trustedClientIp("209.89.30.136, 152.233.40.2")).toBe("209.89.30.136");
+    expect(trustedClientIp("a, b, c")).toBe("a");
+  });
+
+  it("handles a single entry and whitespace", () => {
+    expect(trustedClientIp(" 209.89.30.136 ")).toBe("209.89.30.136");
+  });
+
+  it("falls back for missing or empty headers", () => {
+    expect(trustedClientIp(null)).toBe("local");
+    expect(trustedClientIp("")).toBe("local");
   });
 });
 

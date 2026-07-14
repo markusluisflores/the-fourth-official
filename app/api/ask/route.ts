@@ -4,6 +4,7 @@ import { MAX_QUESTION_CHARS } from "@/lib/constants";
 import {
   GLOBAL_DAILY_LIMIT,
   recordQuestion,
+  trustedClientIp,
   VISITOR_DAILY_LIMIT,
   visitorKey,
 } from "@/lib/rate-limit";
@@ -55,22 +56,12 @@ export async function POST(req: NextRequest): Promise<Response> {
   // Count before any paid call. A gated or failed question still consumes one —
   // simplest honest semantics, and it prevents free probing of the gate.
   //
-  // Known gaps, flagged in Part 2a's final review (2026-07-12), left for a
-  // design-review decision rather than fixed here — same risk category as
-  // the login-attempt gap in app/api/session/route.ts (cost stays capped by
-  // the global ceiling below, so these are fairness/griefing issues, not
-  // spend or security breaches, but whether that's an acceptable trade-off
-  // is an open call, not a settled one — see NEXT-SESSION.md):
-  // 1. The leftmost x-forwarded-for entry is client-controllable, so a
-  //    logged-in user can rotate it per request to defeat their own 20/day
-  //    visitor cap. The trustworthy entry depends on the proxy chain of
-  //    whatever platform this eventually deploys to (Part 2b, not decided
-  //    yet), which is why no fix is applied here yet.
-  // 2. globalCount increments even for requests later rejected by the
-  //    visitor-scope check below, so one visitor spamming this route can
-  //    exhaust the shared 500/day global budget for everyone before ever
-  //    being blocked, at zero paid-API cost to themselves.
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";
+  // Rate-limit key: platform-verified client IP (see trustedClientIp) plus
+  // the visitor cookie. Task 10 probe (2026-07) confirmed Railway's edge
+  // overwrites client-supplied x-forwarded-for entirely and places the real
+  // client IP leftmost — the two Part 2a gap notes (client-controllable XFF,
+  // global-counter ordering) are both resolved: this probe + migration 0005.
+  const ip = trustedClientIp(req.headers.get("x-forwarded-for"));
   const visitorId = req.cookies.get(VISITOR_COOKIE)?.value ?? "no-cookie";
   let counts;
   try {

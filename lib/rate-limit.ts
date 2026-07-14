@@ -10,6 +10,23 @@ export function visitorKey(ip: string, visitorId: string): string {
   return createHash("sha256").update(`${ip}:${visitorId}`).digest("hex").slice(0, 32);
 }
 
+// Which x-forwarded-for hop to trust is platform-specific. Verified live on
+// Railway (Part 2b Task 10 probe, 2026-07): the edge OVERWRITES whatever
+// x-forwarded-for the client sends — four requests with different/absent
+// client-supplied values all produced the real client IP as the leftmost
+// entry (confirmed against the probing machine's independently-verified
+// public IP), with a second, Railway-internal hop IP appended after (not
+// stable across requests, not client-influenced). This is the OPPOSITE of
+// the commonly-assumed "trust the rightmost, client-appended" pattern this
+// project's earlier review (PR #16) flagged as a risk — on Railway, the
+// client cannot inject anything into this header at all, so there is no
+// spoofing vector to defend against here; the fix is purely about
+// extracting the real IP correctly.
+export function trustedClientIp(header: string | null): string {
+  const first = header?.split(",")[0]?.trim();
+  return first || "local";
+}
+
 export interface UsageCounts {
   visitorCount: number;
   globalCount: number;

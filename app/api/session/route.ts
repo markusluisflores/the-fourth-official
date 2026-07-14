@@ -14,7 +14,6 @@ function requireEnv(name: string): string {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  console.log("xff-probe", { xff: req.headers.get("x-forwarded-for") });
   let password: unknown;
   try {
     ({ password } = await req.json());
