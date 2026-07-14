@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { historyEntryMessage, type AskState } from "@/lib/ask-stream";
+import { historyEntryMessage, REFUSED_MESSAGE, type AskState } from "@/lib/ask-stream";
 import { CardBadge } from "@/components/CardBadge";
 import { RulingCard } from "@/components/RulingCard";
 import { LawPassages } from "@/components/LawPassages";
@@ -31,7 +31,7 @@ export function HistoryList({ entries }: { entries: HistoryEntry[] }) {
             {openIndex === i && (
               <div className="mb-3 flex flex-col gap-4 pl-4">
                 {entry.state.phase === "refused" && (
-                  <CardBadge kind="red" message={historyEntryMessage(entry.state) ?? ""} />
+                  <CardBadge kind="red" message={REFUSED_MESSAGE} />
                 )}
                 {entry.state.phase === "gated" && (
                   <p className="text-sm">{historyEntryMessage(entry.state)}</p>
