@@ -5,7 +5,7 @@ export function RemainingBadge({ remaining }: { remaining: number | null }) {
       className="font-mono text-xs opacity-70"
       aria-label={`${remaining} of 20 questions left today`}
     >
-      {remaining}/20 today
+      {remaining} left today
     </span>
   );
 }
