@@ -134,6 +134,11 @@ export function askReducer(state: AskState, action: AskAction): AskState {
       };
     }
     case "done":
+      // streamAnswer (lib/answer.ts) always yields "done" right after a
+      // "refusal" event — don't let the trailing done overwrite the refused
+      // phase with "completed" (which would render a blank ruling instead
+      // of the decline message).
+      if (state.phase === "refused") return state;
       return { ...state, phase: "completed", citedDocumentIndexes: action.citedDocumentIndexes };
     case "refusal":
       return { ...state, phase: "refused", segments: [], passages: [] };

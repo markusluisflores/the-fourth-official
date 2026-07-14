@@ -1,6 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { recordQuestion, trustedClientIp, visitorKey } from "../lib/rate-limit";
+import {
+  recordQuestion,
+  trustedClientIp,
+  VISITOR_DAILY_LIMIT,
+  visitorKey,
+} from "../lib/rate-limit";
+import { VISITOR_DAILY_LIMIT as CLIENT_VISITOR_DAILY_LIMIT } from "../lib/glass-constants";
+
+describe("VISITOR_DAILY_LIMIT", () => {
+  it("client-side RemainingBadge mirror stays in sync with the server value", () => {
+    // lib/glass-constants.ts hand-duplicates this because lib/rate-limit.ts
+    // is server-only and can't be imported from client components.
+    expect(CLIENT_VISITOR_DAILY_LIMIT).toBe(VISITOR_DAILY_LIMIT);
+  });
+});
 
 const fakeClient = (rpc: ReturnType<typeof vi.fn>) => ({ rpc }) as unknown as SupabaseClient;
 

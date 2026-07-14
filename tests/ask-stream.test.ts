@@ -114,6 +114,20 @@ describe("askReducer", () => {
     expect(s.segments).toEqual([]);
   });
 
+  it("stays refused when the stream's trailing done event follows a refusal", () => {
+    // streamAnswer (lib/answer.ts) always yields a `done` event right after
+    // `refusal` — the real event sequence never stops at `refusal` alone.
+    const s = run([
+      { type: "submit", question: "q" },
+      { type: "meta", chunks: [], remaining: { visitor: 19 } },
+      { type: "text", delta: "should be discarded" },
+      { type: "refusal" },
+      { type: "done", citedDocumentIndexes: [] },
+    ]);
+    expect(s.phase).toBe("refused");
+    expect(s.segments).toEqual([]);
+  });
+
   it("reset returns to initial state but keeps remaining", () => {
     const s = run([
       { type: "submit", question: "q" },
