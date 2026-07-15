@@ -465,6 +465,8 @@ git commit -m "feat: batch sub-question retrieval and rank-merge"
 ### Task 3 (REVISED 2026-07-15 — see plan note below): route wiring — elapsed-aware soft-deadline decompose race + merge
 
 > **Why this task was rewritten:** the first attempt at this task (superseded, reverted) implemented `Promise.all([searchChunks(question, 8), decompose(question)])`. A task-review pass found that `Promise.all` blocks *every* request — including simple ones — on decompose's full ~3s latency, contradicting the spec's Goal 2 ("added wait ≈ 0"). This was escalated, redesigned (`superpowers:brainstorming`), reviewed by Fable across three rounds, and merged into the spec via PR #49. This task now implements that corrected design: an elapsed-aware soft-deadline race, spec §3/§4/§7/§9/§10.4.
+>
+> **Plan-level review (2026-07-15, PR #50):** before any implementer built against this revised plan, Fable reviewed the plan document itself (not just the spec) — and, notably, actually ran the given route code and test code empirically rather than only reading it. Found 1 BLOCKER here: both new fake-timer tests would hang/timeout deterministically, because `lib/session.ts`'s real WebCrypto work (session-token creation and verification) doesn't advance under `vi.useFakeTimers()`, so the tests' timer-advancement call would fire before the route ever reached the point of registering the soft-deadline timer. Fixed below (Step 2/3) by mocking `verifySessionToken` and precomputing the request before enabling fake timers — Fable validated this exact fix makes the test pass in ~20ms. The elapsed-aware race logic itself (the actual design) was confirmed correct by the same empirical run — no `Promise.all`-class bug in the mechanism, only in the test scaffolding.
 
 **Files:**
 - Modify: `lib/decompose.ts` (add one export: `DECOMPOSE_SOFT_DEADLINE_MS`)
@@ -493,11 +495,12 @@ Expected: PASS (all 11, unaffected — this is an additive export, no behavior c
 
 - [ ] **Step 2: Extend the route test mocks**
 
-In `tests/ask-route.test.ts`, the module mocks at the top must now also cover `decompose`, `DECOMPOSE_SOFT_DEADLINE_MS`, and `searchChunksBatch`. Add beside the existing `const searchChunks = vi.fn();`:
+In `tests/ask-route.test.ts`, the module mocks at the top must now also cover `decompose`, `DECOMPOSE_SOFT_DEADLINE_MS`, `searchChunksBatch`, AND `verifySessionToken`. Add beside the existing `const searchChunks = vi.fn();`:
 
 ```typescript
 const searchChunksBatch = vi.fn();
 const decompose = vi.fn();
+const verifySessionToken = vi.fn();
 ```
 
 Extend the existing `vi.mock("../lib/retrieval", ...)` factory's returned object with:
@@ -518,16 +521,45 @@ vi.mock("../lib/decompose", async (importOriginal) => {
 });
 ```
 
+**Also mock `verifySessionToken`** (Fable's design review on PR #50 found this is required — see the note below the two new tests for why). Add beside the `lib/decompose` mock:
+
+```typescript
+vi.mock("../lib/session", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/session")>();
+  return {
+    ...actual,
+    verifySessionToken: (...args: unknown[]) => verifySessionToken(...args),
+  };
+});
+```
+
 Add the import at the top of the test file (this is the REAL constant, per the spread above):
 
 ```typescript
 import { DECOMPOSE_SOFT_DEADLINE_MS } from "../lib/decompose";
 ```
 
-In the existing `beforeEach`, add a default so every pre-existing test runs the simple path unchanged:
+In the existing `beforeEach` (make it `async` — it needs to `await` below), add a default so every pre-existing test runs the simple path unchanged, AND default `verifySessionToken` to the REAL implementation so every pre-existing test's session-verification behavior is unaffected:
 
 ```typescript
   decompose.mockResolvedValue(null);
+  const actualSession = await vi.importActual<typeof import("../lib/session")>("../lib/session");
+  verifySessionToken.mockImplementation(actualSession.verifySessionToken);
+```
+
+Add one more helper beside the existing `post()` function — this builds the request (including the real, cryptographically-signed session cookie) eagerly, so it can be constructed BEFORE fake timers are enabled in the two new tests below:
+
+```typescript
+async function buildRequest(body: unknown) {
+  const req = new NextRequest("http://localhost/api/ask", {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: { "content-type": "application/json" },
+  });
+  req.cookies.set(SESSION_COOKIE, await createSessionToken(SECRET));
+  req.cookies.set(VISITOR_COOKIE, "vis-1");
+  return req;
+}
 ```
 
 - [ ] **Step 3: Write the failing tests**
@@ -600,13 +632,24 @@ Append to the `describe("POST /api/ask", ...)` block. The first five exercise th
   });
 
   it("treats a slow decompose as simple once the soft deadline elapses (spec §3, §6)", async () => {
+    // Build the request (real WebCrypto session-token signing) BEFORE
+    // enabling fake timers, and mock verifySessionToken (also real
+    // WebCrypto — see route.ts's first line) so nothing in this test needs
+    // a genuine event-loop turn to resolve once fake timers are active.
+    // Fable's design review on PR #50 found this by actually running the
+    // test: WebCrypto's async work doesn't advance with vi's fake timers,
+    // so a single vi.advanceTimersByTimeAsync() call would sweep before the
+    // route ever reached the point of registering the soft-deadline timer,
+    // making the test hang/timeout every run.
+    const req = await buildRequest({ question: "compound?" });
+    verifySessionToken.mockResolvedValue(true);
     vi.useFakeTimers();
     try {
       let resolveDecompose: (v: string[] | null) => void = () => {};
       decompose.mockImplementation(
         () => new Promise<string[] | null>((resolve) => { resolveDecompose = resolve; }),
       );
-      const resPromise = post({ question: "compound?" });
+      const resPromise = POST(req);
       await vi.advanceTimersByTimeAsync(DECOMPOSE_SOFT_DEADLINE_MS + 50);
       const res = await resPromise;
       expect(res.status).toBe(200);
@@ -628,6 +671,10 @@ Append to the `describe("POST /api/ask", ...)` block. The first five exercise th
     // ALREADY-RESOLVED decompose answer must still be used — not discarded
     // by a fixed wall-clock cutoff measured from request start. This is the
     // property Fable's design review specifically asked to be tested.
+    // Same buildRequest + verifySessionToken mock as the test above, for
+    // the same WebCrypto-vs-fake-timers reason.
+    const req = await buildRequest({ question: "what happens if everyone is sent off?" });
+    verifySessionToken.mockResolvedValue(true);
     vi.useFakeTimers();
     try {
       decompose.mockResolvedValue(["what abandons a match?", "is there a shoot-out?"]);
@@ -643,7 +690,7 @@ Append to the `describe("POST /api/ask", ...)` block. The first five exercise th
             );
           }),
       );
-      const resPromise = post({ question: "what happens if everyone is sent off?" });
+      const resPromise = POST(req);
       await vi.advanceTimersByTimeAsync(DECOMPOSE_SOFT_DEADLINE_MS + 150);
       const res = await resPromise;
       expect(res.status).toBe(200);
@@ -656,6 +703,8 @@ Append to the `describe("POST /api/ask", ...)` block. The first five exercise th
     }
   });
 ```
+
+**Import note:** `POST` is already imported from `../app/api/ask/route` at the top of this file (the existing `post()` helper calls it); the two tests above call it directly since they need to control exactly when the request is built relative to `vi.useFakeTimers()`.
 
 - [ ] **Step 4: Run to verify the new tests fail**
 
@@ -862,11 +911,20 @@ git commit -m "feat: opt-in --decompose eval mode for the compound tier"
 
 ### Task 5: measurement, regression gate, docs
 
-> **Note (2026-07-15):** the soft-deadline measurement steps below (2b, revised
+> **Note (2026-07-15):** the soft-deadline measurement steps below (revised
 > per Fable's design review on PR #49) replace the original latency-sampling
 > step from this session's earlier Task-5 amendment. That original step
 > assumed the reverted `Promise.all` mechanism and is superseded by Task 3's
 > elapsed-aware soft-deadline race — see spec §7/§10.4.
+>
+> **Plan-level review (2026-07-15, PR #50):** Fable's review of this plan
+> revision (not just the spec) found a second BLOCKER: Step 2a/2b below
+> measured only the soft-deadline miss rate, but spec §10.4 requires BOTH
+> that AND confirming simple-question added latency is actually small in
+> practice — the earlier revision dropped that second half entirely when it
+> replaced the stale `Promise.all`-based script. Fixed: Step 2c below restores
+> the simple-question latency sample, rewritten to exercise Task 3's actual
+> elapsed-aware mechanism instead of the old one.
 
 **Files:**
 - Modify: `evals/run-evals.ts` (add soft-deadline timing to `runCompoundSetDecomposed`, Task 4's function)
@@ -962,14 +1020,62 @@ Run: `npm run eval -- --decompose` (twice, per the existing nondeterminism-check
 
 Record from the summary block, for BOTH runs: baseline full coverage (expected 3/9), decomposed full coverage, both mean coverages, the per-question line for the red-card question ("What happens if everyone on a team gets a red card?") including its sub-questions, AND the new soft-deadline miss-rate line. Because the split is nondeterministic, if the two runs' full-coverage counts differ, record both and flag it in the PR description.
 
-**Regression bar §10.4 check:** if the miss rate is at or above 20% on EITHER run, this bar fails — STOP, do not proceed to Step 3. Raise `DECOMPOSE_SOFT_DEADLINE_MS` in `lib/decompose.ts` (e.g. to 1200 or 1500ms) and re-run this step until both runs are under 20%, or escalate to Markus if raising the deadline doesn't help (which would suggest a deeper problem, not a tuning issue).
+**Regression bar §10.4 check:** if the miss rate is at or above 20% on EITHER run, this bar fails — STOP, do not proceed to Step 2c. Raise `DECOMPOSE_SOFT_DEADLINE_MS` in `lib/decompose.ts` (e.g. to 1200 or 1500ms) and re-run this step until both runs are under 20%, or escalate to Markus if raising the deadline doesn't help (which would suggest a deeper problem, not a tuning issue).
+
+- [ ] **Step 2c: Sample simple-question latency under the soft-deadline race (spec §7, §10.4)**
+
+Regression bar §10.4 requires BOTH the miss-rate measurement above AND confirming simple-question added latency is actually small in practice (Fable's design review on PR #50 found the plan's earlier revision measured only the miss rate and dropped this half — flagged as a BLOCKER). This must exercise the ACTUAL elapsed-aware mechanism from Task 3, not the old `Promise.all` shape.
+
+Create a throwaway script (do not commit it) at `scripts/tmp-latency-sample.ts`:
+
+```typescript
+import { readFile } from "node:fs/promises";
+import { decompose, DECOMPOSE_SOFT_DEADLINE_MS } from "../lib/decompose";
+import { searchChunks } from "../lib/retrieval";
+
+interface GoldenQuestion {
+  question: string;
+  expected: string[];
+}
+
+async function main(): Promise<void> {
+  const golden: GoldenQuestion[] = JSON.parse(await readFile("evals/golden-questions.json", "utf8"));
+  const sample = golden.slice(0, 10);
+  const addedMsSamples: number[] = [];
+  for (const { question } of sample) {
+    // Mirrors app/api/ask/route.ts's retrieval block exactly (Task 3).
+    const decomposeStart = Date.now();
+    const subsPromise = decompose(question);
+    const baselineStart = Date.now();
+    await searchChunks(question, 8);
+    const baselineMs = Date.now() - baselineStart;
+    const remainingMs = Math.max(0, DECOMPOSE_SOFT_DEADLINE_MS - (Date.now() - decomposeStart));
+    const softTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), remainingMs));
+    await Promise.race([subsPromise, softTimeout]);
+    const totalMs = Date.now() - decomposeStart;
+    const addedMs = Math.max(0, totalMs - baselineMs);
+    addedMsSamples.push(addedMs);
+    console.log(`${question.slice(0, 60)}  baseline=${baselineMs}ms total=${totalMs}ms added=${addedMs}ms`);
+  }
+  const sorted = [...addedMsSamples].sort((a, b) => a - b);
+  const p50 = sorted[Math.floor(sorted.length * 0.5)];
+  const p95 = sorted[Math.floor(sorted.length * 0.95)];
+  console.log(`\nsimple-question added latency (n=${sample.length}): p50=${p50}ms p95=${p95}ms`);
+}
+
+main();
+```
+
+Run: `npx cross-env NODE_OPTIONS="--experimental-websocket --conditions=react-server" tsx --env-file=.env.local scripts/tmp-latency-sample.ts` (same invocation shape as `npm run eval`, since this script also imports `server-only`-guarded modules). This spends ~10 extra Haiku calls (a small fraction of a cent) — acceptable within Task 5's already-budgeted paid steps. Delete the script when done; it is throwaway per this step's own instruction.
+
+Record the p50/p95 added-latency numbers. If p95 is comfortably sub-second (ideally near-zero, matching §7's "added wait ≈ 0 in the common case" framing), this half of the §10.4 bar passes. If it is not negligible, this is in tension with the miss-rate bar (raising `DECOMPOSE_SOFT_DEADLINE_MS` helps miss-rate but hurts latency, and vice versa) — if no single value satisfies both bars, STOP and escalate to Markus rather than picking one arbitrarily.
 
 - [ ] **Step 3: Record the numbers in the spec's revision history**
 
 Append a row to the revision-history table in `docs/superpowers/specs/2026-07-15-query-decomposition-design.md`:
 
 ```markdown
-| 2026-MM-DD | Measured: compound full coverage N/9 → M/9 (mean 0.NN → 0.NN) with --decompose (run 1); N/9 → M/9 (run 2 if different); red-card question X/4 → Y/4. Soft-deadline (DECOMPOSE_SOFT_DEADLINE_MS=NNNms) miss rate: N/9 (P%) run 1, N/9 (P%) run 2 — under the 20% acceptance bar (spec §10.4). |
+| 2026-MM-DD | Measured: compound full coverage N/9 → M/9 (mean 0.NN → 0.NN) with --decompose (run 1); N/9 → M/9 (run 2 if different); red-card question X/4 → Y/4. Soft-deadline (DECOMPOSE_SOFT_DEADLINE_MS=NNNms) miss rate: N/9 (P%) run 1, N/9 (P%) run 2 — under the 20% acceptance bar (spec §10.4). Simple-question added latency: p50 ~Nms, p95 ~Nms (n=10). |
 ```
 
 (Fill the real values; keep the date current.)
