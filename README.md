@@ -30,6 +30,15 @@ embeddings · Claude Haiku 4.5 with `citations: {enabled: true}` · Vitest · Ra
    (atomic Postgres counters), 300-char input cap, deny-all RLS with server-only
    data access (ADR-001).
 
+## Known limitations
+
+- Compound questions spanning several laws at once (e.g. "what happens if
+  everyone gets a red card?") can exceed what single-pass k=8 retrieval
+  covers: answers cite accurately what was retrieved but may not assemble
+  every relevant law. Measured honestly by the eval harness's compound tier
+  (`npm run eval`); design + baseline:
+  `docs/superpowers/specs/2026-07-14-compound-question-eval-design.md`.
+
 ## Development
 
 `npm run dev` — needs `.env.local` (see `.env.local.example`). Tests: `npm test`.

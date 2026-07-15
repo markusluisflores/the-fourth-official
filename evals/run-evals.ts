@@ -6,6 +6,18 @@ interface Golden {
   expected: string[];
 }
 
+interface CompoundQuestion {
+  question: string;
+  required: string[];
+  note?: string;
+}
+
+// Production uses k=8; the higher ks are an eval-side diagnostic that feeds
+// the spec §5 decision rule ("would a bigger k fix compound coverage?").
+// Separate retrieval calls per k on purpose — RRF ranking is not guaranteed
+// prefix-stable across match_count values.
+const COMPOUND_KS = [8, 12, 16, 24];
+
 // Segment-aware prefix match: "Law 1" must match "Law 1 › ..." but never
 // "Law 11 › ..." (PR #1 review finding — bare startsWith was digit-prefix unsafe).
 export function matchesExpected(breadcrumb: string, expected: string): boolean {
@@ -19,6 +31,21 @@ export function matchesExpected(breadcrumb: string, expected: string): boolean {
 export function scoreQuestion(chunks: { breadcrumb: string }[], expected: string[]): number {
   const idx = chunks.findIndex((c) => expected.some((e) => matchesExpected(c.breadcrumb, e)));
   return idx === -1 ? 0 : idx + 1;
+}
+
+// AND-semantics counterpart to scoreQuestion (which is OR: any expected
+// section counts). A compound question is fully answerable only if EVERY
+// required section has at least one chunk in the top-k. Spec:
+// docs/superpowers/specs/2026-07-14-compound-question-eval-design.md §4.
+export function coverageScore(
+  chunks: { breadcrumb: string }[],
+  required: string[],
+): { coverage: number; missed: string[] } {
+  const missed = required.filter((r) => !chunks.some((c) => matchesExpected(c.breadcrumb, r)));
+  return {
+    coverage: required.length === 0 ? 1 : (required.length - missed.length) / required.length,
+    missed,
+  };
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -72,6 +99,40 @@ async function runGoldenSet(
   return { hits, mrrSum, maxSims };
 }
 
+async function runCompoundSet(compounds: CompoundQuestion[]): Promise<void> {
+  const perK = new Map<number, { full: number; coverageSum: number }>(
+    COMPOUND_KS.map((k): [number, { full: number; coverageSum: number }] => [
+      k,
+      { full: 0, coverageSum: 0 },
+    ]),
+  );
+  for (const c of compounds) {
+    const cells: string[] = [];
+    let missedAtProductionK: string[] = [];
+    for (const k of COMPOUND_KS) {
+      const result = await searchWithRetry(c.question, k);
+      const { coverage, missed } = coverageScore(result.chunks, c.required);
+      const agg = perK.get(k)!;
+      agg.coverageSum += coverage;
+      if (missed.length === 0) agg.full += 1;
+      if (k === COMPOUND_KS[0]) missedAtProductionK = missed;
+      cells.push(`k=${k} ${c.required.length - missed.length}/${c.required.length}`);
+    }
+    console.log(`${cells.join("  ")}  ${c.question}`);
+    if (missedAtProductionK.length > 0) {
+      console.log(`  missed@${COMPOUND_KS[0]}: ${missedAtProductionK.join(" | ")}`);
+    }
+  }
+  console.log(`\n[compound] per-k summary (n=${compounds.length}):`);
+  for (const k of COMPOUND_KS) {
+    const { full, coverageSum } = perK.get(k)!;
+    console.log(
+      `  k=${k}: full coverage ${full}/${compounds.length}` +
+        `  mean coverage ${(coverageSum / compounds.length).toFixed(2)}`,
+    );
+  }
+}
+
 async function main() {
   const goldens: Golden[] = JSON.parse(await readFile("evals/golden-questions.json", "utf8"));
   const paraphrases: Golden[] = JSON.parse(
@@ -79,6 +140,9 @@ async function main() {
   );
   const abstains: AbstainQuestion[] = JSON.parse(
     await readFile("evals/abstain-questions.json", "utf8"),
+  );
+  const compounds: CompoundQuestion[] = JSON.parse(
+    await readFile("evals/compound-questions.json", "utf8"),
   );
 
   console.log("=== Golden set (baseline defense) ===");
@@ -94,6 +158,9 @@ async function main() {
     offTopicSims.push(result.maxSimilarity);
     console.log(`maxSim=${result.maxSimilarity.toFixed(3)}  ${a.question}`);
   }
+
+  console.log("\n=== Compound set (informational — multi-section AND-coverage per k) ===");
+  await runCompoundSet(compounds);
 
   const minOnTopic = Math.min(...golden.maxSims);
   const maxOffTopic = Math.max(...offTopicSims);

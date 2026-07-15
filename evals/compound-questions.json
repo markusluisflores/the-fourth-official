@@ -1,0 +1,47 @@
+[
+  {
+    "question": "What happens if everyone on a team gets a red card?",
+    "required": ["Law 3 › 1", "Law 7 › 5", "Law 10 › 2", "Law 10 › 3"],
+    "note": "The known Part 2b failure: fewer-than-7 abandonment vs penalty-shoot-out confusion. Full answer needs minimum players, abandoned-match consequence, how winners are determined, and when shoot-outs apply."
+  },
+  {
+    "question": "Can a team keep playing if their goalkeeper is sent off and they have no substitutes left?",
+    "required": ["Law 3 › 1", "Law 3 › 4"],
+    "note": "Needs the minimum-players rule AND the outfield-player-becomes-goalkeeper procedure."
+  },
+  {
+    "question": "A defender deliberately punches the ball off the goal line to stop a goal — what happens?",
+    "required": ["Law 12 › 1", "Law 12 › 4"],
+    "note": "Handball direct-free-kick/penalty offence plus the DOGSO sending-off — two sections of Law 12 that retrieval must assemble together."
+  },
+  {
+    "question": "A substitute runs onto the pitch and the ball still ends up in the goal — does the goal count?",
+    "required": ["Law 3 › 7", "Law 3 › 9"],
+    "note": "Extra-person interference rules plus the goal-scored-with-extra-person outcomes table."
+  },
+  {
+    "question": "A penalty kick is awarded in the final seconds of the half — can it still be taken, and can anyone score from the rebound?",
+    "required": ["Law 7 › 4", "Law 14 › 1"],
+    "note": "Time extension for a penalty at the end of a half (Law 7) plus the kick-completion rule (Law 14) that kills the rebound."
+  },
+  {
+    "question": "The ball bursts as it flies toward the goal and still crosses the line — is it a goal and how does play restart?",
+    "required": ["Law 2 › 2", "Law 10 › 1"],
+    "note": "Defective-ball replacement/restart plus the definition of a valid goal."
+  },
+  {
+    "question": "During a penalty shoot-out, can an injured goalkeeper be replaced, and by whom?",
+    "required": ["Law 10 › 3", "Law 3 › 2"],
+    "note": "Shoot-out eligibility rules reference the substitution allowance from Law 3."
+  },
+  {
+    "question": "A defender fouls an attacker who was standing in an offside position but had not yet touched the ball — what does the referee award?",
+    "required": ["Law 11 › 2", "Law 12 › 1"],
+    "note": "Whether an offside offence has even occurred (involvement) vs the foul — the ruling needs both laws."
+  },
+  {
+    "question": "Can a team make an extra substitution in extra time of a cup match, and what is the procedure for making it?",
+    "required": ["Law 3 › 2", "Law 3 › 3"],
+    "note": "Additional-substitution allowance plus the substitution procedure itself."
+  }
+]
