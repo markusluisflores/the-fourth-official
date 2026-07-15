@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Compound questions retrieve all the law sections a complete answer needs, by splitting them into sub-questions with a parallel Haiku call, retrieving per sub-question, and merging — with zero behavior change for simple questions.
+**Goal:** Compound questions retrieve all the law sections a complete answer needs, by splitting them into sub-questions with a parallel Haiku call, retrieving per sub-question, and merging — with the same retrieval results and fallback behavior for simple questions, and latency bounded (not unconditionally unchanged — revised 2026-07-15, see Task 3) rather than exposed to decompose's full budget.
 
-**Architecture:** The `/api/ask` route fires the decompose call and today's baseline retrieval concurrently. A "simple" verdict (or any decomposer failure) uses the baseline result unchanged; a 2–4-way split embeds all sub-questions in one Voyage call, searches per sub-question in parallel, and merges by rank round-robin (dedupe by chunk id, cap 12). The gate and answer stages are untouched; the answering model sees only the original question. Spec: `docs/superpowers/specs/2026-07-15-query-decomposition-design.md`.
+**Architecture:** The `/api/ask` route fires the decompose call and today's baseline retrieval concurrently. The route awaits baseline first (as it always did), then gives decompose only whatever remains of a soft deadline (`DECOMPOSE_SOFT_DEADLINE_MS`) measured from when both calls started — an elapsed-aware race, not a fixed wall-clock cutoff (revised 2026-07-15 per a task-review finding + Fable's design review, PR #49; see Task 3's note). A "simple" verdict (or any decomposer failure, or a miss past the soft deadline) uses the baseline result unchanged; a 2–4-way split embeds all sub-questions in one Voyage call, searches per sub-question in parallel, and merges by rank round-robin (dedupe by chunk id, cap 12). The gate and answer stages are untouched; the answering model sees only the original question. Spec: `docs/superpowers/specs/2026-07-15-query-decomposition-design.md`.
 
 **Tech Stack:** Next.js App Router (TypeScript strict) · `@anthropic-ai/sdk` (structured outputs, `claude-haiku-4-5`) · Voyage `voyage-4-lite` embeddings · Supabase `match_chunks` RPC · Vitest.
 
@@ -462,19 +462,38 @@ git commit -m "feat: batch sub-question retrieval and rank-merge"
 
 ---
 
-### Task 3: route wiring — parallel decompose + merge
+### Task 3 (REVISED 2026-07-15 — see plan note below): route wiring — elapsed-aware soft-deadline decompose race + merge
+
+> **Why this task was rewritten:** the first attempt at this task (superseded, reverted) implemented `Promise.all([searchChunks(question, 8), decompose(question)])`. A task-review pass found that `Promise.all` blocks *every* request — including simple ones — on decompose's full ~3s latency, contradicting the spec's Goal 2 ("added wait ≈ 0"). This was escalated, redesigned (`superpowers:brainstorming`), reviewed by Fable across three rounds, and merged into the spec via PR #49. This task now implements that corrected design: an elapsed-aware soft-deadline race, spec §3/§4/§7/§9/§10.4.
 
 **Files:**
-- Modify: `app/api/ask/route.ts` (retrieval block currently at lines 95–113)
-- Test: `tests/ask-route.test.ts` (extend)
+- Modify: `lib/decompose.ts` (add one export: `DECOMPOSE_SOFT_DEADLINE_MS`)
+- Modify: `app/api/ask/route.ts` (retrieval block currently at lines 95–101 — the reverted first attempt's code; if the revert already ran, this is the same block as originally: `let retrieval; try { retrieval = await searchChunks(question, 8); } ...`)
+- Test: `tests/ask-route.test.ts` (extend), `tests/decompose.test.ts` (no changes needed — the new constant is a plain literal, already covered by the file compiling and existing tests passing)
 
 **Interfaces:**
-- Consumes: `decompose` (Task 1), `searchChunksBatch`, `mergeResults` (Task 2).
-- Produces: no new exports — behavior only. Simple path must remain byte-for-byte today's flow.
+- Consumes: `decompose`, `DECOMPOSE_SOFT_DEADLINE_MS` (`lib/decompose.ts`), `searchChunksBatch`, `mergeResults` (`lib/retrieval.ts`, Task 2).
+- Produces: no new route-level exports — behavior only. Simple path uses identical chunks/gate outcome to today whenever decompose answers within budget (spec §2 Goal 2, revised); latency is *bounded*, not unconditionally unchanged — spec §7.
 
-- [ ] **Step 1: Extend the route test mocks**
+- [ ] **Step 1: Add the soft-deadline constant**
 
-In `tests/ask-route.test.ts`, the module mocks at the top (lines 6–21) must now also cover `decompose` and `searchChunksBatch`. Add beside the existing `const searchChunks = vi.fn();`:
+In `lib/decompose.ts`, add beside the existing `DECOMPOSE_TIMEOUT_MS`:
+
+```typescript
+// Route-level deadline (app/api/ask/route.ts) for how long /api/ask waits on
+// this call before proceeding as simple for the current request — NOT a
+// property of decompose() itself, whose own contract (never rejects, this
+// file's ~3s hard budget above) is unchanged. See spec §3/§4. Initial
+// estimate pending Task 5's latency-sampling validation.
+export const DECOMPOSE_SOFT_DEADLINE_MS = 800;
+```
+
+Run: `npm test -- tests/decompose.test.ts`
+Expected: PASS (all 11, unaffected — this is an additive export, no behavior change to `decompose()` or `parseSubQuestions`).
+
+- [ ] **Step 2: Extend the route test mocks**
+
+In `tests/ask-route.test.ts`, the module mocks at the top must now also cover `decompose`, `DECOMPOSE_SOFT_DEADLINE_MS`, and `searchChunksBatch`. Add beside the existing `const searchChunks = vi.fn();`:
 
 ```typescript
 const searchChunksBatch = vi.fn();
@@ -487,12 +506,22 @@ Extend the existing `vi.mock("../lib/retrieval", ...)` factory's returned object
   searchChunksBatch: (...args: unknown[]) => searchChunksBatch(...args),
 ```
 
-(`mergeResults` stays REAL via the existing `importOriginal` spread — it is pure and worth exercising.) Add a new mock block beside the others:
+(`mergeResults` stays REAL via the existing `importOriginal` spread — it is pure and worth exercising.) Add a new mock block beside the others — this one ALSO spreads `importOriginal` so the real `DECOMPOSE_SOFT_DEADLINE_MS` value is available to the fake-timer tests below, while `decompose` itself stays mocked:
 
 ```typescript
-vi.mock("../lib/decompose", () => ({
-  decompose: (...args: unknown[]) => decompose(...args),
-}));
+vi.mock("../lib/decompose", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/decompose")>();
+  return {
+    ...actual,
+    decompose: (...args: unknown[]) => decompose(...args),
+  };
+});
+```
+
+Add the import at the top of the test file (this is the REAL constant, per the spread above):
+
+```typescript
+import { DECOMPOSE_SOFT_DEADLINE_MS } from "../lib/decompose";
 ```
 
 In the existing `beforeEach`, add a default so every pre-existing test runs the simple path unchanged:
@@ -501,9 +530,9 @@ In the existing `beforeEach`, add a default so every pre-existing test runs the 
   decompose.mockResolvedValue(null);
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [ ] **Step 3: Write the failing tests**
 
-Append to the `describe("POST /api/ask", ...)` block:
+Append to the `describe("POST /api/ask", ...)` block. The first five exercise the merge/fallback/gate/rate-limit behavior (unaffected by the timing refinement — these mocks resolve instantly, which always beats the soft deadline); the last two exercise the soft-deadline race itself (spec §9):
 
 ```typescript
   const chunkRow2 = { ...chunkRow, id: 2, breadcrumb: "Law 10 › 2. Winning team" };
@@ -569,39 +598,102 @@ Append to the `describe("POST /api/ask", ...)` block:
     await post({ question: "offside?" });
     expect(decompose).not.toHaveBeenCalled();
   });
+
+  it("treats a slow decompose as simple once the soft deadline elapses (spec §3, §6)", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveDecompose: (v: string[] | null) => void = () => {};
+      decompose.mockImplementation(
+        () => new Promise<string[] | null>((resolve) => { resolveDecompose = resolve; }),
+      );
+      const resPromise = post({ question: "compound?" });
+      await vi.advanceTimersByTimeAsync(DECOMPOSE_SOFT_DEADLINE_MS + 50);
+      const res = await resPromise;
+      expect(res.status).toBe(200);
+      expect(searchChunksBatch).not.toHaveBeenCalled();
+
+      // The late answer arrives after the response was already produced —
+      // it must have no further effect (spec §6, "answers after the soft
+      // deadline" row).
+      resolveDecompose(["a?", "b?"]);
+      await vi.runAllTimersAsync();
+      expect(searchChunksBatch).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses a decompose answer that already resolved while baseline retrieval was the slow one (spec §3 elapsed-aware deadline)", async () => {
+    // If baseline alone already used up the whole soft-deadline budget, an
+    // ALREADY-RESOLVED decompose answer must still be used — not discarded
+    // by a fixed wall-clock cutoff measured from request start. This is the
+    // property Fable's design review specifically asked to be tested.
+    vi.useFakeTimers();
+    try {
+      decompose.mockResolvedValue(["what abandons a match?", "is there a shoot-out?"]);
+      searchChunksBatch.mockResolvedValue([
+        { chunks: [chunkRow2], maxSimilarity: chunkRow2.similarity },
+      ]);
+      searchChunks.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            setTimeout(
+              () => resolve({ chunks: [chunkRow], maxSimilarity: chunkRow.similarity }),
+              DECOMPOSE_SOFT_DEADLINE_MS + 100,
+            );
+          }),
+      );
+      const resPromise = post({ question: "what happens if everyone is sent off?" });
+      await vi.advanceTimersByTimeAsync(DECOMPOSE_SOFT_DEADLINE_MS + 150);
+      const res = await resPromise;
+      expect(res.status).toBe(200);
+      expect(searchChunksBatch).toHaveBeenCalledWith(
+        ["what abandons a match?", "is there a shoot-out?"],
+        8,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 ```
 
-- [ ] **Step 3: Run to verify the new tests fail**
+- [ ] **Step 4: Run to verify the new tests fail**
 
 Run: `npm test -- tests/ask-route.test.ts`
-Expected: the five new tests FAIL (route neither calls `decompose` nor merges); pre-existing tests still pass.
+Expected: the seven new tests FAIL (route neither calls `decompose` nor merges, and doesn't yet import `DECOMPOSE_SOFT_DEADLINE_MS`); pre-existing tests still pass.
 
-- [ ] **Step 4: Wire the route**
+- [ ] **Step 5: Wire the route**
 
 In `app/api/ask/route.ts`, add imports:
 
 ```typescript
-import { decompose } from "@/lib/decompose";
+import { decompose, DECOMPOSE_SOFT_DEADLINE_MS } from "@/lib/decompose";
 import { isRelevant, mergeResults, searchChunks, searchChunksBatch } from "@/lib/retrieval";
 ```
 
 Replace the retrieval block (currently lines 95–101, the `let retrieval; try { retrieval = await searchChunks(question, 8); } ...`) with:
 
 ```typescript
-  // Parallel decompose-and-retrieve (spec §3): the decompose call races the
-  // baseline retrieval, so simple questions pay no added latency. decompose()
-  // never rejects — a Promise.all rejection here is the baseline retrieval,
-  // which is fatal today too.
+  // Parallel decompose-and-retrieve, elapsed-aware soft deadline (spec §3):
+  // both calls fire concurrently; the route awaits baseline first (as it
+  // always did), then gives decompose only whatever's left of
+  // DECOMPOSE_SOFT_DEADLINE_MS since both calls started. If baseline alone
+  // already used the whole budget, an already-resolved decompose answer is
+  // used for free instead of being discarded by a fixed wall-clock cutoff.
+  // decompose() never rejects (lib/decompose.ts) — the only rejection this
+  // block can see is from searchChunks, which is fatal today too.
   let retrieval;
-  let subQuestions: string[] | null = null;
+  const decomposeStart = Date.now();
+  const subsPromise = decompose(question);
   try {
-    const [baseline, subs] = await Promise.all([searchChunks(question, 8), decompose(question)]);
-    retrieval = baseline;
-    subQuestions = subs;
+    retrieval = await searchChunks(question, 8);
   } catch (err) {
     console.error("retrieval failed", { question: question.slice(0, 80), err });
     return NextResponse.json({ error: UPSTREAM_ERROR }, { status: 502 });
   }
+  const remainingMs = Math.max(0, DECOMPOSE_SOFT_DEADLINE_MS - (Date.now() - decomposeStart));
+  const softTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), remainingMs));
+  const subQuestions = await Promise.race([subsPromise, softTimeout]);
 
   // Compound path: retrieve per sub-question, merge with the baseline.
   // Every failure lands on the baseline result already in hand (spec §6).
@@ -617,21 +709,21 @@ Replace the retrieval block (currently lines 95–101, the `let retrieval; try {
 
 Everything downstream (`isRelevant` gate, `meta` event, `streamAnswer(question, retrieval.chunks)`) is untouched.
 
-- [ ] **Step 5: Run the route tests**
+- [ ] **Step 6: Run the route tests**
 
 Run: `npm test -- tests/ask-route.test.ts`
-Expected: PASS (all, old and new).
+Expected: PASS (all 7 new, all pre-existing).
 
-- [ ] **Step 6: Full verification including build**
+- [ ] **Step 7: Full verification including build**
 
 Run: `npm test && npx tsc --noEmit && npm run lint && npm run build`
 Expected: all green (`build` catches App Router-specific breakage).
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add app/api/ask/route.ts tests/ask-route.test.ts
-git commit -m "feat: parallel decompose-and-merge in ask route"
+git add lib/decompose.ts app/api/ask/route.ts tests/ask-route.test.ts
+git commit -m "feat: elapsed-aware soft-deadline decompose race in ask route"
 ```
 
 ---
@@ -770,14 +862,21 @@ git commit -m "feat: opt-in --decompose eval mode for the compound tier"
 
 ### Task 5: measurement, regression gate, docs
 
+> **Note (2026-07-15):** the soft-deadline measurement steps below (2b, revised
+> per Fable's design review on PR #49) replace the original latency-sampling
+> step from this session's earlier Task-5 amendment. That original step
+> assumed the reverted `Promise.all` mechanism and is superseded by Task 3's
+> elapsed-aware soft-deadline race — see spec §7/§10.4.
+
 **Files:**
+- Modify: `evals/run-evals.ts` (add soft-deadline timing to `runCompoundSetDecomposed`, Task 4's function)
 - Modify: `docs/superpowers/specs/2026-07-15-query-decomposition-design.md` (revision history)
 - Modify: `docs/project-reviewer.md` (compound-question / decomposition talking point)
 - Modify: `README.md` (known-limitation line)
 
 **Interfaces:**
-- Consumes: everything above, complete and merged into the feature branch.
-- Produces: recorded before/after numbers; the regression bar (spec §10) checked; docs updated.
+- Consumes: everything above, complete and merged into the feature branch; `DECOMPOSE_SOFT_DEADLINE_MS` (`lib/decompose.ts`, Task 3).
+- Produces: recorded before/after numbers; the regression bar (spec §10, including the new §10.4 soft-deadline acceptance threshold) checked; docs updated.
 
 - [ ] **Step 1: Run the full regression gate**
 
@@ -793,26 +892,84 @@ npm run eval
 
 Expected: golden 30/30 recall@8, paraphrase and abstain results identical to the recorded baseline (the default path is untouched code), everything else green. If ANY of these regress, STOP — the task is blocked; do not proceed to measurement.
 
-- [ ] **Step 2: Run the measurement**
+- [ ] **Step 2a: Add soft-deadline timing to the eval runner**
 
-Run: `npm run eval -- --decompose`
+Spec §10.4 requires measuring how often `decompose()`'s real latency exceeds `DECOMPOSE_SOFT_DEADLINE_MS`, timed directly — NOT inferred from the eval harness's own elapsed wall-clock time, which is contaminated by `withVoyageRetry`'s 20s×attempt backoff on the *other* calls in the loop (the Voyage embed calls) and would make the miss rate look artificially low (Fable's design-review follow-up finding on PR #49). `decompose()` itself is never wrapped in `withVoyageRetry` — only `searchWithRetry`/the sub-question embed call are — so timing it directly, right where it's already called, gives the real number for free.
 
-Record from the summary block: baseline full coverage (expected 3/9), decomposed full coverage, both mean coverages, and the per-question line for the red-card question ("What happens if everyone on a team gets a red card?") including its sub-questions. Because the split is nondeterministic, run it twice; if the two runs' full-coverage counts differ, record both and flag it in the PR description.
+In `evals/run-evals.ts`, add `DECOMPOSE_SOFT_DEADLINE_MS` to the existing import from `../lib/decompose`:
 
-- [ ] **Step 2b: Sample simple-question latency (PR #46 review SUGGESTION)**
+```typescript
+import { decompose, DECOMPOSE_SOFT_DEADLINE_MS } from "../lib/decompose";
+```
 
-The spec's Goal 2 claims simple questions pay "added wait ≈ 0," but the route's `Promise.all([searchChunks(...), decompose(...)])` actually waits for whichever call is slower — `decompose()`'s 3000ms SDK timeout does not reject early on a merely-slow (not hung) Haiku response. This was never measured. Before recording numbers, get a rough read on it:
+Replace `runCompoundSetDecomposed` (from Task 4) with this version — the only changes are the added `decomposeStart`/`decomposeMs`/`softDeadlineMisses` tracking and the new summary line; coverage logic is untouched:
 
-Write a throwaway script (do not commit it) that, for ~10 single-topic questions from `evals/golden-questions.json`, times `await Promise.all([searchChunks(q, 8), decompose(q)])` directly (bypassing the route) and prints wall-clock ms per call. Report the rough p50/p95 added latency versus `searchChunks` alone. This spends a small amount beyond the eval's ~1 cent (10 more Haiku calls) — acceptable, already within Task 5's paid-step budget.
+```typescript
+async function runCompoundSetDecomposed(compounds: CompoundQuestion[]): Promise<void> {
+  const K = 8;
+  let baseFull = 0;
+  let decFull = 0;
+  let baseSum = 0;
+  let decSum = 0;
+  let softDeadlineMisses = 0;
+  for (const c of compounds) {
+    const baseline = await searchWithRetry(c.question, K);
+    const decomposeStart = Date.now();
+    const subs = await decompose(c.question);
+    const decomposeMs = Date.now() - decomposeStart;
+    if (decomposeMs > DECOMPOSE_SOFT_DEADLINE_MS) softDeadlineMisses += 1;
+    let merged = baseline;
+    let subCount = 1;
+    if (subs && subs.length >= 2) {
+      subCount = subs.length;
+      const subResults = await withVoyageRetry(() => searchChunksBatch(subs, K));
+      if (subResults.length > 0) merged = mergeResults([baseline, ...subResults]);
+    }
+    const base = coverageScore(baseline.chunks, c.required);
+    const dec = coverageScore(merged.chunks, c.required);
+    baseSum += base.coverage;
+    decSum += dec.coverage;
+    if (base.missed.length === 0) baseFull += 1;
+    if (dec.missed.length === 0) decFull += 1;
+    console.log(
+      `base ${c.required.length - base.missed.length}/${c.required.length}` +
+        ` → decomposed ${c.required.length - dec.missed.length}/${c.required.length}` +
+        `  (${subCount} sub-question${subCount === 1 ? "" : "s"}, decompose ${decomposeMs}ms)  ${c.question}`,
+    );
+    if (subs && subs.length >= 2) console.log(`  subs: ${subs.join(" | ")}`);
+    if (dec.missed.length > 0) console.log(`  still missed: ${dec.missed.join(" | ")}`);
+  }
+  console.log(
+    `\n[compound --decompose] n=${compounds.length}, k=${K}/query, merged cap ${MERGED_CHUNK_CAP}:`,
+  );
+  console.log(`  full coverage: baseline ${baseFull}/${compounds.length}` +
+    ` → decomposed ${decFull}/${compounds.length}`);
+  console.log(`  mean coverage: baseline ${(baseSum / compounds.length).toFixed(2)}` +
+    ` → decomposed ${(decSum / compounds.length).toFixed(2)}`);
+  const missRatePct = (softDeadlineMisses / compounds.length) * 100;
+  console.log(
+    `  soft-deadline (${DECOMPOSE_SOFT_DEADLINE_MS}ms) miss rate: ${softDeadlineMisses}/${compounds.length}` +
+      ` (${missRatePct.toFixed(0)}%) — acceptance bar: must be under 20% (spec §10.4)`,
+  );
+}
+```
 
-If p95 added latency is negligible (roughly sub-second), the "added wait ≈ 0" framing in the spec stands — note the measured number in the revision-history row below. If it is not negligible, soften the spec's Goal 2 wording to disclose the tail-latency exposure explicitly (same treatment as the Voyage-429 residual risk in §7/§12) rather than leaving the unqualified claim in place.
+No new pure logic is introduced (this is timing instrumentation on an existing eval script, not product code) — no new unit test required, matching Task 4's own "no new pure logic → no new unit tests" note. Verification is running the mode (Step 2b below).
+
+- [ ] **Step 2b: Run the measurement**
+
+Run: `npm run eval -- --decompose` (twice, per the existing nondeterminism-check requirement below)
+
+Record from the summary block, for BOTH runs: baseline full coverage (expected 3/9), decomposed full coverage, both mean coverages, the per-question line for the red-card question ("What happens if everyone on a team gets a red card?") including its sub-questions, AND the new soft-deadline miss-rate line. Because the split is nondeterministic, if the two runs' full-coverage counts differ, record both and flag it in the PR description.
+
+**Regression bar §10.4 check:** if the miss rate is at or above 20% on EITHER run, this bar fails — STOP, do not proceed to Step 3. Raise `DECOMPOSE_SOFT_DEADLINE_MS` in `lib/decompose.ts` (e.g. to 1200 or 1500ms) and re-run this step until both runs are under 20%, or escalate to Markus if raising the deadline doesn't help (which would suggest a deeper problem, not a tuning issue).
 
 - [ ] **Step 3: Record the numbers in the spec's revision history**
 
 Append a row to the revision-history table in `docs/superpowers/specs/2026-07-15-query-decomposition-design.md`:
 
 ```markdown
-| 2026-MM-DD | Measured: compound full coverage N/9 → M/9 (mean 0.NN → 0.NN) with --decompose; red-card question X/4 → Y/4. Simple-question added latency: p50 ~Nms, p95 ~Nms. |
+| 2026-MM-DD | Measured: compound full coverage N/9 → M/9 (mean 0.NN → 0.NN) with --decompose (run 1); N/9 → M/9 (run 2 if different); red-card question X/4 → Y/4. Soft-deadline (DECOMPOSE_SOFT_DEADLINE_MS=NNNms) miss rate: N/9 (P%) run 1, N/9 (P%) run 2 — under the 20% acceptance bar (spec §10.4). |
 ```
 
 (Fill the real values; keep the date current.)
@@ -831,12 +988,12 @@ N/9 to M/9 full-coverage in our eval. Single-topic questions are unaffected.
 
 - [ ] **Step 5: Update the interview guide**
 
-In `docs/project-reviewer.md`, find the compound-question section (`grep -n -i "compound" docs/project-reviewer.md`) and extend it with 3–5 sentences: the measured baseline justified decomposition over raising k (2/9 questions unfixable at k=24); the parallel architecture keeps simple questions at baseline latency; the fallback contract means the decomposer can never make the product worse; before/after numbers.
+In `docs/project-reviewer.md`, find the compound-question section (`grep -n -i "compound" docs/project-reviewer.md`) and extend it with 3–5 sentences: the measured baseline justified decomposition over raising k (2/9 questions unfixable at k=24); the elapsed-aware soft-deadline race bounds simple-question latency instead of leaving it at baseline exactly (a task-review + design-review finding worth mentioning as an interview talking point — the reference implementation's naive `Promise.all` would have blocked every request on decompose's full latency); the fallback contract means the decomposer can never make retrieval worse than today; before/after coverage numbers and the soft-deadline miss rate.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add docs/superpowers/specs/2026-07-15-query-decomposition-design.md docs/project-reviewer.md README.md
+git add evals/run-evals.ts docs/superpowers/specs/2026-07-15-query-decomposition-design.md docs/project-reviewer.md README.md
 git commit -m "docs: record query-decomposition measurement + README update"
 ```
 
@@ -849,6 +1006,7 @@ Spec §10.3: after the branch deploys (post-merge, Railway), Markus asks the ori
 ## Execution notes
 
 - Tasks 1 and 2 are independent of each other; Task 3 needs both; Task 4 needs 1+2; Task 5 needs all.
-- Per the global CLAUDE.md rule, every implementer subagent dispatch must state the working directory AND branch, and its prompt must require `cd C:\ClaudeProjects\the-fourth-official && pwd && git branch --show-current` as the literal first command, stopping as BLOCKED on any mismatch.
+- Per the global CLAUDE.md rule, every implementer subagent dispatch must state the working directory AND branch, and its prompt must require `cd [directory] && pwd && git branch --show-current` as the literal first command, stopping as BLOCKED on any mismatch. **This session executes in a worktree** (`superpowers:using-git-worktrees`), not the main checkout — the required directory is `C:\ClaudeProjects\the-fourth-official\.claude\worktrees\feat+query-decomposition`, not `C:\ClaudeProjects\the-fourth-official` (the latter stays on `main`). Use whichever directory this session's worktree actually lives at if resumed elsewhere.
 - Task 1's review battery additionally includes `/security-review` + the `security-reviewer` agent (spec §9).
-- `npm run eval -- --decompose` spends real money (~a cent) and needs `.env.local`'s `ANTHROPIC_API_KEY` — it is already present; do not echo or commit it.
+- Task 3 was reworked mid-execution (2026-07-15): the first attempt implemented the pre-redesign `Promise.all` mechanism, was found Critical by task review, reverted, and redesigned via `superpowers:brainstorming` + a Fable-reviewed spec amendment (PR #49, merged) before being redone against the version documented in this plan. See Task 3's own note.
+- `npm run eval -- --decompose` spends real money (~a cent) and needs `.env.local`'s `ANTHROPIC_API_KEY` — it is already present; do not echo or commit it. Task 5 now runs it twice as both the nondeterminism check AND the soft-deadline miss-rate measurement (spec §10.4) — no extra paid runs needed beyond what was already planned.
