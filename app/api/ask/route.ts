@@ -8,8 +8,7 @@ import {
   VISITOR_DAILY_LIMIT,
   visitorKey,
 } from "@/lib/rate-limit";
-import { decompose } from "@/lib/decompose";
-import { isRelevant, mergeResults, searchChunks, searchChunksBatch } from "@/lib/retrieval";
+import { isRelevant, searchChunks } from "@/lib/retrieval";
 import { SESSION_COOKIE, verifySessionToken, VISITOR_COOKIE } from "@/lib/session";
 import { serverSupabase } from "@/lib/supabase";
 
@@ -93,30 +92,12 @@ export async function POST(req: NextRequest): Promise<Response> {
   }
   const remaining = { visitor: Math.max(0, VISITOR_DAILY_LIMIT - counts.visitorCount) };
 
-  // Parallel decompose-and-retrieve (spec §3): the decompose call races the
-  // baseline retrieval, so simple questions pay no added latency. decompose()
-  // never rejects — a Promise.all rejection here is the baseline retrieval,
-  // which is fatal today too.
   let retrieval;
-  let subQuestions: string[] | null = null;
   try {
-    const [baseline, subs] = await Promise.all([searchChunks(question, 8), decompose(question)]);
-    retrieval = baseline;
-    subQuestions = subs;
+    retrieval = await searchChunks(question, 8);
   } catch (err) {
     console.error("retrieval failed", { question: question.slice(0, 80), err });
     return NextResponse.json({ error: UPSTREAM_ERROR }, { status: 502 });
-  }
-
-  // Compound path: retrieve per sub-question, merge with the baseline.
-  // Every failure lands on the baseline result already in hand (spec §6).
-  if (subQuestions && subQuestions.length >= 2) {
-    try {
-      const subResults = await searchChunksBatch(subQuestions, 8);
-      if (subResults.length > 0) retrieval = mergeResults([retrieval, ...subResults]);
-    } catch (err) {
-      console.error("sub-question retrieval failed", { question: question.slice(0, 80), err });
-    }
   }
 
   // Relevance gate (spec §6.4): off-topic and nonsense input never reaches
