@@ -2,10 +2,9 @@
 
 import { useCallback, useReducer, useRef } from "react";
 import { askReducer, initialAskState, type AskState } from "@/lib/ask-stream";
+import { classifyAskResponse, NETWORK_ERROR } from "@/lib/ask-stream-response";
 import { createSseParser } from "@/lib/sse-client";
 import { sseToAction } from "@/lib/sse-to-action";
-
-const NETWORK_ERROR = "something went wrong, please try again shortly";
 
 export function useAskStream(): { state: AskState; ask: (question: string) => Promise<void> } {
   const [state, dispatch] = useReducer(askReducer, initialAskState);
@@ -30,26 +29,13 @@ export function useAskStream(): { state: AskState; ask: (question: string) => Pr
       return;
     }
 
-    if (res.status === 401) {
+    const outcome = await classifyAskResponse(res);
+    if (outcome.kind === "redirect") {
       window.location.href = "/gate";
       return;
     }
-
-    if (res.headers.get("content-type")?.includes("application/json")) {
-      const body = await res.json();
-      if (body.kind === "gated") {
-        dispatch({
-          type: "gated",
-          message: body.message,
-          chunks: body.chunks,
-          maxSimilarity: body.maxSimilarity,
-          remaining: body.remaining,
-        });
-      } else if (body.kind === "rate_limited") {
-        dispatch({ type: "rate_limited", scope: body.scope, message: body.message });
-      } else {
-        dispatch({ type: "request_failed", message: body.error ?? NETWORK_ERROR });
-      }
+    if (outcome.kind === "action") {
+      dispatch(outcome.action);
       return;
     }
 

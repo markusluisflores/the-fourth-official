@@ -67,6 +67,17 @@ export type AskAction =
   | { type: "request_failed"; message: string }
   | { type: "reset" };
 
+export const REFUSED_MESSAGE = "The Fourth Official declined to answer that one.";
+
+// What a history entry should show when expanded (spec: gated/refused
+// entries archive their retrieved chunks or partial segments, but neither
+// carries the message the user actually saw — this recovers it).
+export function historyEntryMessage(state: AskState): string | null {
+  if (state.phase === "gated") return state.message;
+  if (state.phase === "refused") return REFUSED_MESSAGE;
+  return null;
+}
+
 export const initialAskState: AskState = {
   phase: "idle",
   question: "",
