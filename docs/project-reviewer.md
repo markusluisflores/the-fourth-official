@@ -2,7 +2,7 @@
 
 > **Living document.** Updated as new concepts are added or lessons are learned.
 > New to vector/RAG vocabulary? The **Glossary** at the end of this file defines every term this project uses in plain English.
-> Last updated: 2026-07-14 (Part 1 — ingestion + retrieval — completed 2026-07-09. Part 2a — ask API, guardrails, gate calibration — completed 2026-07-12. Part 2b — UI, guardrail hardening, Railway deploy — completed 2026-07-13; PR #27 approved by a fresh-context review and merged 2026-07-14. Post-merge: issues #30/#31 fixed on PR #33; the compound-question eval tier built on PR #34; a workflow-audit sweep landed a new agentic-workflow hook on PR #35 — all three open, pending review, as of this update. Traces to `docs/superpowers/specs/2026-07-08-laws-rag-design.md`.)
+> Last updated: 2026-07-14 (Part 1 — ingestion + retrieval — completed 2026-07-09. Part 2a — ask API, guardrails, gate calibration — completed 2026-07-12. Part 2b — UI, guardrail hardening, Railway deploy — completed 2026-07-13; PR #27 approved by a fresh-context review and merged 2026-07-14. Post-merge: issues #30/#31 fixed on PR #33; the compound-question eval tier built on PR #34; a workflow-audit sweep landed repo fixes on PR #35 (its bigger outcome, a new agentic-workflow dispatch-guard hook, lives in global Claude Code settings outside this repo — see Concept 18) — all three open, pending review, as of this update. Traces to `docs/superpowers/specs/2026-07-08-laws-rag-design.md`.)
 
 ---
 
