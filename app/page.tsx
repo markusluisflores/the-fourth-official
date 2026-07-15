@@ -9,7 +9,7 @@ import { LawPassages } from "@/components/LawPassages";
 import { RemainingBadge } from "@/components/RemainingBadge";
 import { RulingCard } from "@/components/RulingCard";
 import { useAskStream } from "@/hooks/useAskStream";
-import type { AskState } from "@/lib/ask-stream";
+import { REFUSED_MESSAGE, type AskState } from "@/lib/ask-stream";
 
 const TERMINAL = ["completed", "refused", "failed", "failed_partial", "gated"] as const;
 
@@ -56,9 +56,7 @@ export default function AskPage() {
 
       {state.phase === "limited" && <CardBadge kind="yellow" message={state.message ?? ""} />}
       {state.phase === "failed" && <CardBadge kind="red" message={state.message ?? ""} />}
-      {state.phase === "refused" && (
-        <CardBadge kind="red" message="The Fourth Official declined to answer that one." />
-      )}
+      {state.phase === "refused" && <CardBadge kind="red" message={REFUSED_MESSAGE} />}
       {state.phase === "gated" && <p className="text-sm">{state.message}</p>}
 
       <RulingCard
