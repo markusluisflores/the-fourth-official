@@ -300,6 +300,19 @@ user-input→LLM surface.
    to ever catch real compound questions. Numbers recorded in this spec's
    revision history alongside the coverage numbers.
 
+   **Measurement caveat (added 2026-07-15, Fable's follow-up re-review):** the
+   eval harness's own `withVoyageRetry` backoff (for Voyage's free-tier 429s)
+   can inflate the harness's "baseline" elapsed time to tens of seconds under
+   the elapsed-aware formula (§3, §4) — far looser than production, where
+   `searchChunks` never retries and is normally sub-second. Reusing the two
+   `--decompose` eval runs verbatim would therefore likely *understate* the
+   real production miss rate, making the 20% threshold decorative rather than
+   load-bearing. Task 5 must measure `decompose()`'s raw latency directly
+   against the fixed `DECOMPOSE_SOFT_DEADLINE_MS` (not against the harness's
+   own inflated elapsed time) for this specific bar, and note in the recorded
+   numbers that the harness-timing figure (if reported at all) is a lower
+   bound / directional signal only, not the production-representative one.
+
 ## 11. Deliverables (implementation plan's checklist)
 
 1. `lib/decompose.ts` — Haiku call, structured output, parse/validate, timeout,
@@ -334,3 +347,4 @@ session per the established split.
 | 2026-07-15 | Initial spec — approved in-session (parallel architecture, opt-in eval mode). |
 | 2026-07-15 | Retrieval-timing redesign: Task 3's task-review pass found that the reference `Promise.all([searchChunks, decompose])` shape (§3, as originally given in the implementation plan) blocks *every* request — including simple ones — on decompose's full latency, contradicting Goal 2's "added wait ≈ 0" claim; the route's own comment claiming a "race" was inaccurate for `Promise.all` semantics. Replaced with a bounded soft-deadline race: the route waits on decompose only up to `DECOMPOSE_SOFT_DEADLINE_MS` (proposed 800ms, separate from decompose's own ~3s hard budget), falling back to the baseline path if decompose hasn't answered in time. Trades a new, disclosed risk (compound detection becomes timing-dependent — §7) for a bounded worst-case latency instead of an unconditional one. Approved by Markus (brainstorming session, 2026-07-15) pending Fable's design review on this PR before merge. |
 | 2026-07-15 | Fable's design review (PR #49) approved the mechanism but found 1 BLOCKER + 3 SUGGESTIONs: (1, BLOCKER, fixed) added an acceptance threshold (§10.4, <20% soft-deadline miss rate on the compound tier) instead of only recording the miss rate — as written, the eval's coverage number (§10.2) could pass while the soft deadline silently disabled compound detection in production; §10.2 now notes the eval number is an upper bound, not a guarantee, on production. (2, SUGGESTION, adopted) refined the soft deadline from a fixed wall-clock cutoff to one measured from elapsed wait since both calls started (§3, §4) — same worst-case latency bound, strictly fewer timing-dependent misses, since a decompose result that arrives while the route is still stuck waiting on a slow baseline is no longer wastefully discarded. (3, SUGGESTION, adopted) softened §7's "usually fast" framing — the soft deadline races decompose's full non-streaming completion, not time-to-first-token. (4, SUGGESTION, adopted) clarified why the ~3s hard budget still matters post-redesign (§4): it bounds the abandoned background call's resource lifetime and remains the only timing guard on the eval's `--decompose` mode. Two NITs also fixed: §7's latency formula was mislabeled "added" when it described total latency; §11's deliverables checklist now names the soft-deadline race and the miss-rate measurement explicitly. |
+| 2026-07-15 | Fable's follow-up re-review (PR #49) confirmed the BLOCKER fix and the elapsed-aware deadline math, and approved with one new SUGGESTION (adopted): the eval harness's own `withVoyageRetry` backoff can inflate its "baseline" elapsed time to tens of seconds under the elapsed-aware formula, far looser than production's normally-sub-second `searchChunks` — so reusing the two `--decompose` eval runs verbatim for §10.4's miss-rate measurement would likely understate real production risk, making the 20% threshold decorative. §10.4 now requires Task 5 to measure `decompose()`'s raw latency directly against the fixed soft deadline for this specific bar, not the harness's own inflated elapsed time. Zero BLOCKERs remain — approved for merge. |
