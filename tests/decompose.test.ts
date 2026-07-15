@@ -83,12 +83,13 @@ describe("decompose", () => {
     expect(await decompose("q?", fakeClient(create))).toBeNull();
   });
 
-  it("returns null when client is omitted and ANTHROPIC_API_KEY is unset", async () => {
+  it("resolves to null (never rejects) when no client is provided and no API key is configured", async () => {
     const originalKey = process.env.ANTHROPIC_API_KEY;
     try {
       delete process.env.ANTHROPIC_API_KEY;
-      // This call would previously reject if the Anthropic constructor throws synchronously
-      // Now it should resolve to null, respecting the "never rejects" contract
+      // When credentials are unavailable and no client is provided, the entire flow
+      // (client construction + API call) should resolve to null, never reject.
+      // This exercises the no-client code path end-to-end through the auth failure.
       const result = await decompose("test question?");
       expect(result).toBeNull();
     } finally {
