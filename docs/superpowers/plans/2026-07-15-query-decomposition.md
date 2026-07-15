@@ -799,12 +799,20 @@ Run: `npm run eval -- --decompose`
 
 Record from the summary block: baseline full coverage (expected 3/9), decomposed full coverage, both mean coverages, and the per-question line for the red-card question ("What happens if everyone on a team gets a red card?") including its sub-questions. Because the split is nondeterministic, run it twice; if the two runs' full-coverage counts differ, record both and flag it in the PR description.
 
+- [ ] **Step 2b: Sample simple-question latency (PR #46 review SUGGESTION)**
+
+The spec's Goal 2 claims simple questions pay "added wait ≈ 0," but the route's `Promise.all([searchChunks(...), decompose(...)])` actually waits for whichever call is slower — `decompose()`'s 3000ms SDK timeout does not reject early on a merely-slow (not hung) Haiku response. This was never measured. Before recording numbers, get a rough read on it:
+
+Write a throwaway script (do not commit it) that, for ~10 single-topic questions from `evals/golden-questions.json`, times `await Promise.all([searchChunks(q, 8), decompose(q)])` directly (bypassing the route) and prints wall-clock ms per call. Report the rough p50/p95 added latency versus `searchChunks` alone. This spends a small amount beyond the eval's ~1 cent (10 more Haiku calls) — acceptable, already within Task 5's paid-step budget.
+
+If p95 added latency is negligible (roughly sub-second), the "added wait ≈ 0" framing in the spec stands — note the measured number in the revision-history row below. If it is not negligible, soften the spec's Goal 2 wording to disclose the tail-latency exposure explicitly (same treatment as the Voyage-429 residual risk in §7/§12) rather than leaving the unqualified claim in place.
+
 - [ ] **Step 3: Record the numbers in the spec's revision history**
 
 Append a row to the revision-history table in `docs/superpowers/specs/2026-07-15-query-decomposition-design.md`:
 
 ```markdown
-| 2026-MM-DD | Measured: compound full coverage N/9 → M/9 (mean 0.NN → 0.NN) with --decompose; red-card question X/4 → Y/4. |
+| 2026-MM-DD | Measured: compound full coverage N/9 → M/9 (mean 0.NN → 0.NN) with --decompose; red-card question X/4 → Y/4. Simple-question added latency: p50 ~Nms, p95 ~Nms. |
 ```
 
 (Fill the real values; keep the date current.)
