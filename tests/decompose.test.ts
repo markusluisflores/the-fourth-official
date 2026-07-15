@@ -82,4 +82,19 @@ describe("decompose", () => {
     const create = vi.fn().mockResolvedValue({ stop_reason: "end_turn", content: [] });
     expect(await decompose("q?", fakeClient(create))).toBeNull();
   });
+
+  it("returns null when client is omitted and ANTHROPIC_API_KEY is unset", async () => {
+    const originalKey = process.env.ANTHROPIC_API_KEY;
+    try {
+      delete process.env.ANTHROPIC_API_KEY;
+      // This call would previously reject if the Anthropic constructor throws synchronously
+      // Now it should resolve to null, respecting the "never rejects" contract
+      const result = await decompose("test question?");
+      expect(result).toBeNull();
+    } finally {
+      if (originalKey !== undefined) {
+        process.env.ANTHROPIC_API_KEY = originalKey;
+      }
+    }
+  });
 });

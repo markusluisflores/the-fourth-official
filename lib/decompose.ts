@@ -48,12 +48,10 @@ export function parseSubQuestions(raw: string): string[] | null {
 // Resolves to 1-4 sub-questions, or null meaning "take the simple path".
 // Never rejects: the decomposer is an optimization, not a dependency —
 // every failure mode must land on today's exact behavior (spec §6).
-export async function decompose(
-  question: string,
-  client: Anthropic = new Anthropic(),
-): Promise<string[] | null> {
+export async function decompose(question: string, client?: Anthropic): Promise<string[] | null> {
   try {
-    const response = await client.messages.create(
+    const activeClient = client ?? new Anthropic();
+    const response = await activeClient.messages.create(
       {
         model: DECOMPOSE_MODEL,
         max_tokens: MAX_DECOMPOSE_TOKENS,
