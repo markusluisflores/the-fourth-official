@@ -467,6 +467,8 @@ git commit -m "feat: batch sub-question retrieval and rank-merge"
 > **Why this task was rewritten:** the first attempt at this task (superseded, reverted) implemented `Promise.all([searchChunks(question, 8), decompose(question)])`. A task-review pass found that `Promise.all` blocks *every* request — including simple ones — on decompose's full ~3s latency, contradicting the spec's Goal 2 ("added wait ≈ 0"). This was escalated, redesigned (`superpowers:brainstorming`), reviewed by Fable across three rounds, and merged into the spec via PR #49. This task now implements that corrected design: an elapsed-aware soft-deadline race, spec §3/§4/§7/§9/§10.4.
 >
 > **Plan-level review (2026-07-15, PR #50):** before any implementer built against this revised plan, Fable reviewed the plan document itself (not just the spec) — and, notably, actually ran the given route code and test code empirically rather than only reading it. Found 1 BLOCKER here: both new fake-timer tests would hang/timeout deterministically, because `lib/session.ts`'s real WebCrypto work (session-token creation and verification) doesn't advance under `vi.useFakeTimers()`, so the tests' timer-advancement call would fire before the route ever reached the point of registering the soft-deadline timer. Fixed below (Step 2/3) by mocking `verifySessionToken` and precomputing the request before enabling fake timers — Fable validated this exact fix makes the test pass in ~20ms. The elapsed-aware race logic itself (the actual design) was confirmed correct by the same empirical run — no `Promise.all`-class bug in the mechanism, only in the test scaffolding.
+>
+> **Independent fresh-context review (2026-07-15, PR #50):** a separately-dispatched review with no memory of the rounds above (given only the merged spec and this plan, not told what was already found) independently re-confirmed the elapsed-aware race and the fake-timer fix are both correct, and additionally caught that Step 4's "all seven new tests FAIL" claim was wrong — 4 of the 7 new tests already pass against the unwired route (regression guards, not RED tests). Fixed in Step 4 below.
 
 **Files:**
 - Modify: `lib/decompose.ts` (add one export: `DECOMPOSE_SOFT_DEADLINE_MS`)
@@ -709,7 +711,8 @@ Append to the `describe("POST /api/ask", ...)` block. The first five exercise th
 - [ ] **Step 4: Run to verify the new tests fail**
 
 Run: `npm test -- tests/ask-route.test.ts`
-Expected: the seven new tests FAIL (route neither calls `decompose` nor merges, and doesn't yet import `DECOMPOSE_SOFT_DEADLINE_MS`); pre-existing tests still pass.
+
+**Expected (corrected 2026-07-15 — an independent fresh-context review of this plan traced this by hand and found the original "all seven FAIL" claim was wrong, which would have confused a literal TDD implementer):** only 3 of the 7 new tests actually FAIL against the current, unwired route — `merges sub-question retrievals and answers with the ORIGINAL question`, `gates on the MERGED max similarity`, and `uses a decompose answer that already resolved while baseline retrieval was the slow one` (these three assert that `searchChunksBatch` was actually invoked or that gating used a merged result — the unwired route never merges, so these correctly fail). The other 4 — `keeps the simple path when decompose returns one sub-question or null`, `falls back to the baseline result when sub-question retrieval throws`, `never calls decompose for rate-limited questions`, and `treats a slow decompose as simple once the soft deadline elapses` — already PASS against the unwired route, because they only assert behavior the current simple-only code already exhibits (e.g. "decompose is never called" is trivially true when decompose isn't wired in at all yet). This is expected and correct — they're regression guards for behavior that must stay true after wiring, not RED-phase tests. Do not treat their early pass as a sign anything is wrong. All pre-existing tests still pass.
 
 - [ ] **Step 5: Wire the route**
 
@@ -925,9 +928,29 @@ git commit -m "feat: opt-in --decompose eval mode for the compound tier"
 > replaced the stale `Promise.all`-based script. Fixed: Step 2c below restores
 > the simple-question latency sample, rewritten to exercise Task 3's actual
 > elapsed-aware mechanism instead of the old one.
+>
+> **Independent fresh-context review (2026-07-15, PR #50):** a review with
+> no prior context on this session's back-and-forth (deliberately dispatched
+> fresh, given only the merged spec and this plan — not told what earlier
+> rounds already found) caught two things the earlier, more leading review
+> rounds missed: (1) **BLOCKER, fixed** — Step 2c's throwaway script fired 10
+> back-to-back Voyage calls with no spacing and no `.catch` on `main()`,
+> which would 429-crash around question 4; fixed with 21s spacing between
+> samples (avoiding the need for retry/backoff, which would have
+> re-introduced the same measurement contamination the spec's own caveat
+> warns about) and an error handler. (2) **Confirmed as a real sequencing
+> gap, not yet fixed in this note** — this task's file list and Step 2a both
+> assume Task 4 (`runCompoundSetDecomposed` in `evals/run-evals.ts`) is
+> already implemented and merged into this branch. It is NOT — verified via
+> `grep -n "runCompoundSetDecomposed\|--decompose" evals/run-evals.ts`
+> returning zero matches at the time of this review. **Task 4 must be
+> executed (per its own section below) before Step 2a of this task can run**
+> — the Execution notes' original dependency ordering ("Task 5 needs all")
+> already said this; this session's redesign work lost track of it along
+> the way.
 
 **Files:**
-- Modify: `evals/run-evals.ts` (add soft-deadline timing to `runCompoundSetDecomposed`, Task 4's function)
+- Modify: `evals/run-evals.ts` (add soft-deadline timing to `runCompoundSetDecomposed` — **requires Task 4 to be complete first**, since that function doesn't exist until Task 4 builds it)
 - Modify: `docs/superpowers/specs/2026-07-15-query-decomposition-design.md` (revision history)
 - Modify: `docs/project-reviewer.md` (compound-question / decomposition talking point)
 - Modify: `README.md` (known-limitation line)
@@ -1035,14 +1058,24 @@ import { searchChunks } from "../lib/retrieval";
 
 interface GoldenQuestion {
   question: string;
-  expected: string[];
 }
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function main(): Promise<void> {
   const golden: GoldenQuestion[] = JSON.parse(await readFile("evals/golden-questions.json", "utf8"));
   const sample = golden.slice(0, 10);
   const addedMsSamples: number[] = [];
-  for (const { question } of sample) {
+  for (let i = 0; i < sample.length; i++) {
+    // Space calls 21s apart -- Voyage's free tier is 3 requests/minute (one
+    // every ~20s) -- so this raw, single-attempt timing never hits a 429 and
+    // is never contaminated by retry/backoff (the same contamination the
+    // spec's own caveat warns about for the compound-tier miss-rate
+    // measurement — an independent plan review, 2026-07-15, caught that the
+    // original version of this script had neither spacing nor a catch on
+    // main(), and would 429-crash around question 4).
+    if (i > 0) await sleep(21_000);
+    const { question } = sample[i];
     // Mirrors app/api/ask/route.ts's retrieval block exactly (Task 3).
     const decomposeStart = Date.now();
     const subsPromise = decompose(question);
@@ -1059,23 +1092,26 @@ async function main(): Promise<void> {
   }
   const sorted = [...addedMsSamples].sort((a, b) => a - b);
   const p50 = sorted[Math.floor(sorted.length * 0.5)];
-  const p95 = sorted[Math.floor(sorted.length * 0.95)];
-  console.log(`\nsimple-question added latency (n=${sample.length}): p50=${p50}ms p95=${p95}ms`);
+  const max = sorted[sorted.length - 1];
+  console.log(`\nsimple-question added latency (n=${sample.length}): p50=${p50}ms max=${max}ms`);
 }
 
-main();
+main().catch((err) => {
+  console.error(err);
+  process.exitCode = 1;
+});
 ```
 
-Run: `npx cross-env NODE_OPTIONS="--experimental-websocket --conditions=react-server" tsx --env-file=.env.local scripts/tmp-latency-sample.ts` (same invocation shape as `npm run eval`, since this script also imports `server-only`-guarded modules). This spends ~10 extra Haiku calls (a small fraction of a cent) — acceptable within Task 5's already-budgeted paid steps. Delete the script when done; it is throwaway per this step's own instruction.
+Run: `npx cross-env NODE_OPTIONS="--experimental-websocket --conditions=react-server" tsx --env-file=.env.local scripts/tmp-latency-sample.ts` (same invocation shape as `npm run eval`, since this script also imports `server-only`-guarded modules). This spends ~10 extra Haiku calls (a small fraction of a cent) and takes ~3-4 minutes wall-clock (the 21s spacing) — acceptable within Task 5's already-budgeted paid steps. Delete the script when done; it is throwaway per this step's own instruction.
 
-Record the p50/p95 added-latency numbers. If p95 is comfortably sub-second (ideally near-zero, matching §7's "added wait ≈ 0 in the common case" framing), this half of the §10.4 bar passes. If it is not negligible, this is in tension with the miss-rate bar (raising `DECOMPOSE_SOFT_DEADLINE_MS` helps miss-rate but hurts latency, and vice versa) — if no single value satisfies both bars, STOP and escalate to Markus rather than picking one arbitrarily.
+Record the p50/max added-latency numbers (labeled "max," not "p95" — with only 10 samples, the 95th percentile is really just the largest observed value; calling it "p95" would overstate the statistical precision). If the max is comfortably sub-second (ideally near-zero, matching §7's "added wait ≈ 0 in the common case" framing), this half of the §10.4 bar passes. If it is not negligible, this is in tension with the miss-rate bar (raising `DECOMPOSE_SOFT_DEADLINE_MS` helps miss-rate but hurts latency, and vice versa) — if no single value satisfies both bars, STOP and escalate to Markus rather than picking one arbitrarily.
 
 - [ ] **Step 3: Record the numbers in the spec's revision history**
 
 Append a row to the revision-history table in `docs/superpowers/specs/2026-07-15-query-decomposition-design.md`:
 
 ```markdown
-| 2026-MM-DD | Measured: compound full coverage N/9 → M/9 (mean 0.NN → 0.NN) with --decompose (run 1); N/9 → M/9 (run 2 if different); red-card question X/4 → Y/4. Soft-deadline (DECOMPOSE_SOFT_DEADLINE_MS=NNNms) miss rate: N/9 (P%) run 1, N/9 (P%) run 2 — under the 20% acceptance bar (spec §10.4). Simple-question added latency: p50 ~Nms, p95 ~Nms (n=10). |
+| 2026-MM-DD | Measured: compound full coverage N/9 → M/9 (mean 0.NN → 0.NN) with --decompose (run 1); N/9 → M/9 (run 2 if different); red-card question X/4 → Y/4. Soft-deadline (DECOMPOSE_SOFT_DEADLINE_MS=NNNms) miss rate: N/9 (P%) run 1, N/9 (P%) run 2 — under the 20% acceptance bar (spec §10.4). Simple-question added latency: p50 ~Nms, max ~Nms (n=10). |
 ```
 
 (Fill the real values; keep the date current.)
