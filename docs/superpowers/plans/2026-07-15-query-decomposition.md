@@ -1035,7 +1035,10 @@ async function runCompoundSetDecomposed(compounds: CompoundQuestion[]): Promise<
 }
 ```
 
-No new pure logic is introduced (this is timing instrumentation on an existing eval script, not product code) — no new unit test required, matching Task 4's own "no new pure logic → no new unit tests" note. Verification is running the mode (Step 2b below).
+No new pure logic is introduced (this is timing instrumentation on an existing eval script, not product code) — no new unit test required, matching Task 4's own "no new pure logic → no new unit tests" note. Verification is running the mode (Step 2b below) — but since `tsx` doesn't typecheck ahead of time, run `npx tsc --noEmit` first to catch any slip in this edit before it lands in the commit (a second independent review, PR #50, flagged this step was otherwise the only one in the whole plan that edits real TypeScript without a typecheck immediately after).
+
+Run: `npx tsc --noEmit`
+Expected: clean (no new errors from this edit).
 
 - [ ] **Step 2b: Run the measurement**
 
@@ -1048,6 +1051,8 @@ Record from the summary block, for BOTH runs: baseline full coverage (expected 3
 - [ ] **Step 2c: Sample simple-question latency under the soft-deadline race (spec §7, §10.4)**
 
 Regression bar §10.4 requires BOTH the miss-rate measurement above AND confirming simple-question added latency is actually small in practice (Fable's design review on PR #50 found the plan's earlier revision measured only the miss rate and dropped this half — flagged as a BLOCKER). This must exercise the ACTUAL elapsed-aware mechanism from Task 3, not the old `Promise.all` shape.
+
+**Wait ~30s before starting this step** if Step 2b's runs just finished — a second independent review (PR #50) noted Step 2b's own Voyage calls (two full `--decompose` runs) can leave the free tier's rate window still hot, and this step's first call has no spacing before it (only between samples) since it assumes a clean slate.
 
 Create a throwaway script (do not commit it) at `scripts/tmp-latency-sample.ts`:
 
