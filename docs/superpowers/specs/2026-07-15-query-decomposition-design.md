@@ -30,11 +30,15 @@ decides *how*, not *whether*.
    compound eval tier's full-coverage rate improves over the recorded 3/9 @ k=8.
 2. Simple questions (the majority) keep the same retrieval results and the
    same behavior on any decomposer failure. Latency is *bounded*, not
-   guaranteed byte-for-byte identical: a soft deadline (§3, §4) caps the
-   worst-case added wait instead of exposing every request to decompose's
-   full ~3s budget (revised 2026-07-15 — the original "same latency,
-   unconditionally" framing didn't hold under the reference implementation;
-   see the revision-history entry).
+   guaranteed byte-for-byte identical and not near-zero: a soft deadline
+   (§3, §4) caps the worst-case added wait instead of exposing every request
+   to decompose's full budget. Measurement (revised 2026-07-15 a second time,
+   after real latency data — see the revision-history entries) found the
+   original "same latency, unconditionally" framing didn't hold under the
+   reference implementation, AND that decompose's real-world latency floor
+   (~1s+ for a live Haiku call) means the honest common-case added latency is
+   **~0.5–1.5s over baseline, capped around 2s** — not "≈0". §7 has the full
+   numbers and reasoning.
 3. The improvement is a reproducible number: an opt-in eval mode runs the
    decomposed path against the compound tier.
 
@@ -58,7 +62,7 @@ gate → stream — with the retrieve stage widened:
 ```mermaid
 flowchart TD
     A[validate + rate-count<br/>unchanged] --> B[baseline retrieval<br/>searchChunks q, k=8]
-    A --> C[decompose call<br/>Haiku, structured JSON, ~3s hard budget]
+    A --> C[decompose call<br/>Haiku, structured JSON, ~4s hard budget]
     C -->|answers within the route's<br/>soft deadline| D{1 sub-question,<br/>or any failure?}
     C -->|misses the soft deadline<br/>DECOMPOSE_SOFT_DEADLINE_MS| S[treated as simple for<br/>this request; the real call<br/>keeps running unseen, result discarded]
     D -->|yes| S
@@ -125,30 +129,37 @@ decomposition coverage, not production latency.
   counts):** trim and drop empty strings; if more than 4 remain, keep the
   first 4; if 0 remain → fallback. Result of exactly 1 → simple path.
 - **Budget:** two separate timeouts, deliberately not conflated:
-  - `DECOMPOSE_TIMEOUT_MS` (~3s, unchanged) — the SDK-level hard timeout on
-    the call itself, inside `decompose()`. On expiry the call rejects the
-    promise internally and `decompose()` resolves to `null`, same as any
-    other failure mode. This bound still matters even though production never
+  - `DECOMPOSE_TIMEOUT_MS` (**4000ms, revised 2026-07-15 from the original
+    3000ms** — a real measured call was clipped at exactly 3000ms by this
+    timeout, meaning the original value was cutting into the genuine tail of
+    decompose's latency distribution rather than only guarding against true
+    outliers; production latency is unaffected by this bump, since production
+    never waits past the soft deadline below — the only two things that
+    consume this bound are the abandoned background call's own lifetime and
+    the eval's `--decompose` mode) — the SDK-level hard timeout on the call
+    itself, inside `decompose()`. On expiry the call rejects the promise
+    internally and `decompose()` resolves to `null`, same as any other
+    failure mode. This bound still matters even though production never
     *waits* past the soft deadline (below): it's what guarantees the
     abandoned background call eventually finishes and stops consuming
     resources, and it's the only timing guard on the eval's `--decompose`
     mode (Task 4), which awaits `decompose()` to full completion and applies
     no soft deadline at all (§3, §9).
-  - `DECOMPOSE_SOFT_DEADLINE_MS` (proposed 800ms, exported alongside
+  - `DECOMPOSE_SOFT_DEADLINE_MS` (**2500ms, revised 2026-07-15 from the
+    original 800ms estimate** — real measurement found the original estimate
+    left the feature close to a no-op in production; see §7 and §10.4 for
+    the full derivation and the larger-sample validation that confirms or
+    adjusts this value before merge), exported alongside
     `DECOMPOSE_TIMEOUT_MS` from `lib/decompose.ts` for cohesion with the
     other decompose-call constants, even though it's consumed only by the
-    route) — the total time budget (measured from when both calls start,
+    route — the total time budget (measured from when both calls start,
     not a second independent clock — §3) that `/api/ask` gives decompose's
     answer before proceeding as simple for this request. This is *not* a
     property of `decompose()` itself — the function's own contract (never
-    rejects, ~3s budget) is unchanged; the route just stops listening for the
-    answer earlier. 800ms is an initial estimate (baseline retrieval — one
-    embed call plus one Postgres RPC — is typically well under a second;
-    Haiku structured-output calls on a small token budget are usually fast
-    but not guaranteed — and note this races decompose's full non-streaming
-    completion, not time-to-first-token, so "usually fast" is optimistic
-    until measured), to be validated by Task 5's latency sampling (§10)
-    before merge.
+    rejects) is unchanged; the route just stops listening for the answer
+    earlier. Note this races decompose's full non-streaming completion, not
+    time-to-first-token — a genuine driver of why this needed to be much
+    higher than the original 800ms guess.
 
 ## 5. Merge policy
 
@@ -173,8 +184,8 @@ to 8 chunks, ordered by RRF score from `match_chunks`).
 |---|---|
 | Decompose call errors (network, 429, 5xx) | Fall back to baseline; log warning |
 | `stop_reason: "refusal"`, malformed or empty output | Same fallback |
-| Decompose exceeds ~3 s (its own hard budget) | Abandon call; baseline path |
-| Decompose answers after the route's soft deadline but before its own ~3s hard budget | Route already proceeded on baseline for this request; the late answer is discarded, not used, not retried |
+| Decompose exceeds ~4 s (its own hard budget) | Abandon call; baseline path |
+| Decompose answers after the route's soft deadline but before its own ~4s hard budget | Route already proceeded on baseline for this request; the late answer is discarded, not used, not retried |
 | Sub-question batch embed fails (e.g. Voyage free-tier 429 burst) | Baseline path |
 | One sub-question's `match_chunks` fails | Merge the lists that succeeded (baseline included) |
 | Baseline retrieval fails | 502 — same as today; the one fatal error, already fatal now |
@@ -188,14 +199,25 @@ retrying.
   bounded by `DECOMPOSE_SOFT_DEADLINE_MS` measured from elapsed wait (§3, §4).
   Total retrieval-phase latency is `max(baseline, min(decompose, soft
   deadline))`; the latency *added* over baseline-alone (pre-feature) is
-  `max(0, min(decompose, soft deadline) − baseline)`. In the common case
-  (baseline already takes longer than the soft deadline, or decompose answers
-  before it) added latency is ≈ 0, same as originally intended; the worst case
-  is now capped at the soft deadline (proposed 800ms) instead of decompose's
-  full ~3s budget. This replaces the original "added wait ≈ 0,
-  unconditionally" claim, which a task-review pass (2026-07-15) found didn't
-  actually hold under the reference `Promise.all` shape — see the
-  revision-history entry below.
+  `max(0, min(decompose, soft deadline) − baseline)`. This replaces the
+  original "added wait ≈ 0, unconditionally" claim, which a task-review pass
+  (2026-07-15) found didn't actually hold under the reference `Promise.all`
+  shape — see the revision-history entry below.
+
+  **Revised again (2026-07-15, second pass) with real numbers.** A first
+  attempt at measuring this used the compound-tier `--decompose` eval runs
+  (n=9) and found decompose's real latency floor is much higher than assumed
+  — live Haiku calls with structured JSON output routinely take **~1–3
+  seconds**, not sub-second. The honest common-case added latency for a
+  *simple* question is **~0.5–1.5s over baseline, capped around 2s** — not
+  "≈0". (One mitigating factor: the 1–3s figures were measured on
+  *compound*-tier questions, whose decompose output is 2–4 full sub-questions
+  — a simple question's output is much shorter, just the question echoed
+  back, so simple-question decompose latency should sit toward the fast end
+  of that range; §10.4's dedicated sample is what actually confirms this,
+  not an assumption.) `DECOMPOSE_SOFT_DEADLINE_MS = 2500` (up from the
+  original 800ms estimate) is the current working value — see §4 and §10.4
+  for how it was derived and how it's validated before merge.
 - **Compound questions:** one extra embed round-trip + parallel searches; ~1 s
   extra before streaming starts (unchanged).
 - **Spend:** one Haiku call per question (cent-fractions), bounded by the
@@ -216,9 +238,8 @@ retrying.
   quality loss (one compound question, one request, gets simple-path
   retrieval) for capping every request's worst-case latency, rather than
   exposing every request to up to 3s of added wait for the sake of catching
-  the rare slow-decompose case. Task 5's latency sampling records how often
-  decompose's real latency exceeds the soft deadline, as a proxy for how often
-  this actually happens.
+  the rare slow-decompose case. §10.4 defines the measurement that quantifies
+  how often this actually happens, and its statistical power.
 
 ## 8. Threat model note
 
@@ -285,33 +306,72 @@ user-input→LLM surface.
    threshold added 2026-07-15 per Fable's design review — a BLOCKER: recording
    the miss rate without a pass/fail line would let this bar pass while the
    soft deadline silently disabled compound detection in production).
-   Latency sampling confirms `DECOMPOSE_SOFT_DEADLINE_MS`'s added latency is
-   small for simple questions in practice (§7), AND measures how often
-   decompose's real latency exceeds the remaining soft-deadline budget across
-   the compound tier (the proxy for how often a genuinely compound question
-   gets timed out into the simple path in production). **Acceptance
-   threshold: this miss rate must be under 20%** (an initial, deliberately
-   loose bar for a low-traffic portfolio demo, not a tuned SLO) **on both
-   `--decompose` runs** (Task 5 already runs the mode twice for the
-   split-nondeterminism check — reuse those two runs for this measurement,
-   no extra paid calls needed). If the miss rate is at or above the
-   threshold on either run, this bar fails: raise `DECOMPOSE_SOFT_DEADLINE_MS`
-   and re-measure before merge, rather than shipping a soft deadline too tight
-   to ever catch real compound questions. Numbers recorded in this spec's
-   revision history alongside the coverage numbers.
 
-   **Measurement caveat (added 2026-07-15, Fable's follow-up re-review):** the
-   eval harness's own `withVoyageRetry` backoff (for Voyage's free-tier 429s)
-   can inflate the harness's "baseline" elapsed time to tens of seconds under
-   the elapsed-aware formula (§3, §4) — far looser than production, where
-   `searchChunks` never retries and is normally sub-second. Reusing the two
-   `--decompose` eval runs verbatim would therefore likely *understate* the
-   real production miss rate, making the 20% threshold decorative rather than
-   load-bearing. Task 5 must measure `decompose()`'s raw latency directly
-   against the fixed `DECOMPOSE_SOFT_DEADLINE_MS` (not against the harness's
-   own inflated elapsed time) for this specific bar, and note in the recorded
-   numbers that the harness-timing figure (if reported at all) is a lower
-   bound / directional signal only, not the production-representative one.
+   **Superseded 2026-07-15 (second pass): the n=9 measurement had inadequate
+   statistical power.** The original approach reused the two 9-question
+   `--decompose` eval runs. At n=9, "under 20%" operationally means "at most 1
+   miss" — an effective 11.1% bar, not 20% — and at n=9 even a genuinely-good
+   ~11%-true-rate configuration only passes **both** runs by chance about 55%
+   of the time (binomial: P(≤1 miss in 9) ≈ 0.74 per run, squared for both
+   runs). The first attempt at this measurement (800ms, then 2500ms) produced
+   a 100% miss rate and then a 22% miss rate respectively — the second result
+   is not strong evidence 2500ms is wrong; it's within the noise band a small
+   sample produces even for a passing configuration. **The fix is measurement
+   power, not the threshold or an aggressively raised deadline** (Fable's
+   design review, 2026-07-15): decompose() only touches the Anthropic API —
+   no Voyage, no Supabase, no rate-limit spacing needed — so a dedicated
+   decompose-only sample can run far more trials for negligible extra cost.
+
+   **Current measurement:** a throwaway script (Task 5) times `decompose()`
+   directly (`Date.now()` around the call, no harness involvement) against
+   all 9 compound-tier questions, cycled **8× each (n = 72)**, recording for
+   each call whether its raw latency exceeded `DECOMPOSE_SOFT_DEADLINE_MS`
+   (2500ms — §4), and whether the result was suspiciously fast-and-null (a
+   likely API/auth error masquerading as a fast success — a real false-pass
+   risk an independent review, PR #56, caught: `decompose()` never rejects,
+   so a broken API key resolves near-instantly to `null` for every call,
+   which would otherwise look like a perfect 0% miss rate). Takes roughly
+   2-3 minutes, costs well under a cent. **Sample size caveat, honestly
+   disclosed:** n=72 gives ~2% granularity, still not a large-N guarantee —
+   good enough to make an informed constant choice for a 20-questions/day
+   demo, not a rigorously powered statistical test. If Markus wants tighter
+   confidence, the same script scales to a larger n at the same per-call
+   cost.
+
+   **Acceptance threshold: miss rate must be under 20% on the n=72 sample.**
+   - **A modest overshoot (20-30%)** is a borderline result, not proof the
+     mechanism is unworkable — a 25% miss rate still means the feature helps
+     75% of genuinely compound questions. Try one bounded further increase to
+     `DECOMPOSE_SOFT_DEADLINE_MS` (e.g. +500ms) and re-measure once. **Do not
+     creep it repeatedly** toward `DECOMPOSE_TIMEOUT_MS` — a soft deadline
+     within noise of the hard timeout is no longer a meaningful design
+     element (see §4's rationale for keeping them distinct).
+   - **A substantial miss rate (roughly ≥30-40%), or a bounded increase that
+     doesn't help,** is the real signal to stop tuning and escalate to
+     Markus. The honest fallback is deleting the soft-deadline race entirely
+     and simply awaiting `decompose()` under its hard timeout (this was the
+     reverted `Promise.all` shape from earlier in this branch's history —
+     reinstating it would then be a *measured decision*, not the unexamined
+     default it was the first time). **This fallback explicitly abandons the
+     companion latency bar below, not a latency-neutral alternative** — every
+     question, not just compound ones, would pay up to the full hard timeout
+     in exchange for perfect compound detection; be explicit about that
+     tradeoff when presenting it to Markus.
+
+   **Companion bar — simple-question added latency must also pass, not just
+   the miss rate:** the miss-rate bar alone doesn't bound the actual user-
+   facing cost of a high `DECOMPOSE_SOFT_DEADLINE_MS`. Step 2c's existing
+   simple-question latency sample (p50/max added latency, §7) gets its own
+   threshold: **p50 added latency should be comfortably under 1500ms.** If
+   raising the deadline to clear the miss-rate bar pushes simple-question p50
+   added latency past that line, both bars can't be satisfied simultaneously
+   at any single value — STOP and escalate to Markus rather than picking one
+   bar over the other unilaterally.
+
+   Numbers recorded in this spec's revision history alongside the coverage
+   numbers: n=72 sample's miss rate, p50/max simple-question added latency,
+   and the final `DECOMPOSE_SOFT_DEADLINE_MS`/`DECOMPOSE_TIMEOUT_MS` values
+   (2500ms/4000ms are the working values pending this measurement — see §4).
 
 ## 11. Deliverables (implementation plan's checklist)
 
@@ -348,3 +408,6 @@ session per the established split.
 | 2026-07-15 | Retrieval-timing redesign: Task 3's task-review pass found that the reference `Promise.all([searchChunks, decompose])` shape (§3, as originally given in the implementation plan) blocks *every* request — including simple ones — on decompose's full latency, contradicting Goal 2's "added wait ≈ 0" claim; the route's own comment claiming a "race" was inaccurate for `Promise.all` semantics. Replaced with a bounded soft-deadline race: the route waits on decompose only up to `DECOMPOSE_SOFT_DEADLINE_MS` (proposed 800ms, separate from decompose's own ~3s hard budget), falling back to the baseline path if decompose hasn't answered in time. Trades a new, disclosed risk (compound detection becomes timing-dependent — §7) for a bounded worst-case latency instead of an unconditional one. Approved by Markus (brainstorming session, 2026-07-15) pending Fable's design review on this PR before merge. |
 | 2026-07-15 | Fable's design review (PR #49) approved the mechanism but found 1 BLOCKER + 3 SUGGESTIONs: (1, BLOCKER, fixed) added an acceptance threshold (§10.4, <20% soft-deadline miss rate on the compound tier) instead of only recording the miss rate — as written, the eval's coverage number (§10.2) could pass while the soft deadline silently disabled compound detection in production; §10.2 now notes the eval number is an upper bound, not a guarantee, on production. (2, SUGGESTION, adopted) refined the soft deadline from a fixed wall-clock cutoff to one measured from elapsed wait since both calls started (§3, §4) — same worst-case latency bound, strictly fewer timing-dependent misses, since a decompose result that arrives while the route is still stuck waiting on a slow baseline is no longer wastefully discarded. (3, SUGGESTION, adopted) softened §7's "usually fast" framing — the soft deadline races decompose's full non-streaming completion, not time-to-first-token. (4, SUGGESTION, adopted) clarified why the ~3s hard budget still matters post-redesign (§4): it bounds the abandoned background call's resource lifetime and remains the only timing guard on the eval's `--decompose` mode. Two NITs also fixed: §7's latency formula was mislabeled "added" when it described total latency; §11's deliverables checklist now names the soft-deadline race and the miss-rate measurement explicitly. |
 | 2026-07-15 | Fable's follow-up re-review (PR #49) confirmed the BLOCKER fix and the elapsed-aware deadline math, and approved with one new SUGGESTION (adopted): the eval harness's own `withVoyageRetry` backoff can inflate its "baseline" elapsed time to tens of seconds under the elapsed-aware formula, far looser than production's normally-sub-second `searchChunks` — so reusing the two `--decompose` eval runs verbatim for §10.4's miss-rate measurement would likely understate real production risk, making the 20% threshold decorative. §10.4 now requires Task 5 to measure `decompose()`'s raw latency directly against the fixed soft deadline for this specific bar, not the harness's own inflated elapsed time. Zero BLOCKERs remain — approved for merge. |
+| 2026-07-15 | **Second design pass, after real measurement (docs/decompose-latency-threshold branch, off feat/query-decomposition):** Task 5 measured `DECOMPOSE_SOFT_DEADLINE_MS` at its shipped 800ms and found a 100% miss rate — the feature would be a near-total no-op in production. Raised to 2500ms and re-measured: still 22% (above the 20% bar). Investigation into a fixable root cause (hidden extended thinking, missing prompt-cache eligibility, first-request schema-compilation cost, `max_tokens` inflation) came back empty — decompose's real latency floor (~1–3s for a live Haiku structured-output call) appears to be inherent, not a bug. Fable's design input identified the actual root cause: at n=9, "under 20%" is really an ~11% bar, and even a genuinely-passing configuration only clears both measurement runs by chance ~55% of the time — the 22% result wasn't strong evidence 2500ms is wrong, just small-sample noise. Resolution: keep 2500ms/4000ms (`DECOMPOSE_SOFT_DEADLINE_MS`/`DECOMPOSE_TIMEOUT_MS`, up from 800ms/3000ms) as working values, replace the n=9 reused-eval-run measurement with a dedicated n≥36 decompose-only sample (§10.4) for adequate statistical power, add a companion acceptance bar on simple-question added latency (p50 < 1500ms) so both sides of the tradeoff have a pass/fail line, and pre-commit to an escalation path (delete the soft-deadline race, don't creep the deadline toward the hard timeout) if the larger sample still fails. §2 Goal 2 and §7 rewritten to state the honest common-case added latency (~0.5–1.5s, capped ~2s) instead of "≈0". Pending Fable's review of this revision before merge back into `feat/query-decomposition`. |
+| 2026-07-15 | Fable's fresh-context review (PR #56) verified the n=9 statistics claim independently (confirmed correct, and noted it understates the problem at higher true miss rates) and found 1 BLOCKER + 3 SUGGESTIONs: (1, BLOCKER, fixed) both new throwaway sampling scripts (§10.4) could print a false-passing 0% miss rate if `ANTHROPIC_API_KEY` were missing/invalid — `decompose()` never rejects (Task 1 contract), so a broken key resolves every call to `null` in ~0ms, which looked identical to genuinely fast, successful calls. Fixed: both scripts now fail fast if the key is unset, track null-result counts, and warn if null results average under 200ms (a strong signal of an error, not a genuine timeout/refusal). (2, SUGGESTION, adopted) raised the miss-rate sample from n=36 (4 cycles) to n=72 (8 cycles) — marginal cost ~1 more minute for meaningfully tighter statistical power. (3, SUGGESTION, adopted) softened the escalation rule: a modest 20-30% miss rate now gets one bounded further deadline increase and a re-measure, rather than immediately treating any ≥20% result as proof the mechanism is unworkable; only a substantial miss rate (≥30-40%) or a bounded increase that doesn't help triggers escalation to Markus. (4, SUGGESTION, adopted) made explicit that the escalation fallback (deleting the soft-deadline race) abandons the companion latency bar by design — it's the opposite tradeoff, not a latency-neutral alternative. Fixes applied; pending Fable's confirmation before merge. |
+| 2026-07-15 | Fable's follow-up re-review (PR #56) found the BLOCKER fix itself was subtly broken in the second (simple-question latency) script: it checked `totalMs < 200`, but `totalMs` is elapsed time since BOTH calls started, dominated by baseline retrieval's own latency (normally well over 200ms per §7) — a broken API key would never trip that check even though it's exactly the failure mode the fix exists to catch, reintroducing the false-pass bug in the twin script. **Fixed** (Task 5 Step 2d): the script now tracks `decompose()`'s own settle time independently via a `.then()` handler, separate from the race's total elapsed time, so the null/fast-error check fires only on decompose's actual duration. Also adopted 2 minor SUGGESTIONs: the 20%/30% escalation boundary is no longer ambiguously double-covered by both buckets, and the bounded-retry step now gives the concrete edit (`DECOMPOSE_SOFT_DEADLINE_MS` 2500→3000) instead of a vague "try increasing it." One more SUGGESTION adopted: `lib/decompose.ts`'s doc-comments above both timing constants (not just their literal values) get updated in Task 5 Step 2a, since the originals described a pre-measurement state ("initial estimate pending validation") that's now stale. |
