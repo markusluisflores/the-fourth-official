@@ -472,7 +472,7 @@ git commit -m "feat: batch sub-question retrieval and rank-merge"
 
 **Files:**
 - Modify: `lib/decompose.ts` (add one export: `DECOMPOSE_SOFT_DEADLINE_MS`)
-- Modify: `app/api/ask/route.ts` (retrieval block currently at lines 95–101 — the reverted first attempt's code; if the revert already ran, this is the same block as originally: `let retrieval; try { retrieval = await searchChunks(question, 8); } ...`)
+- Modify: `app/api/ask/route.ts` (retrieval block at lines 95–101 — the first attempt's `Promise.all` code was reverted at `691daab`; this is the original block: `let retrieval; try { retrieval = await searchChunks(question, 8); } ...`)
 - Test: `tests/ask-route.test.ts` (extend), `tests/decompose.test.ts` (no changes needed — the new constant is a plain literal, already covered by the file compiling and existing tests passing)
 
 **Interfaces:**
@@ -716,7 +716,7 @@ Run: `npm test -- tests/ask-route.test.ts`
 
 - [ ] **Step 5: Wire the route**
 
-In `app/api/ask/route.ts`, add imports:
+In `app/api/ask/route.ts`, add the `lib/decompose` import, and REPLACE the existing `@/lib/retrieval` import line (currently `import { isRelevant, searchChunks } from "@/lib/retrieval";`) with the wider one below — adding both as separate imports would be a duplicate-import error:
 
 ```typescript
 import { decompose, DECOMPOSE_SOFT_DEADLINE_MS } from "@/lib/decompose";
@@ -744,8 +744,12 @@ Replace the retrieval block (currently lines 95–101, the `let retrieval; try {
     return NextResponse.json({ error: UPSTREAM_ERROR }, { status: 502 });
   }
   const remainingMs = Math.max(0, DECOMPOSE_SOFT_DEADLINE_MS - (Date.now() - decomposeStart));
-  const softTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), remainingMs));
+  let softTimeoutId: ReturnType<typeof setTimeout>;
+  const softTimeout = new Promise<null>((resolve) => {
+    softTimeoutId = setTimeout(() => resolve(null), remainingMs);
+  });
   const subQuestions = await Promise.race([subsPromise, softTimeout]);
+  clearTimeout(softTimeoutId!); // tidy up whichever side didn't win the race
 
   // Compound path: retrieve per sub-question, merge with the baseline.
   // Every failure lands on the baseline result already in hand (spec §6).
@@ -939,9 +943,11 @@ git commit -m "feat: opt-in --decompose eval mode for the compound tier"
 > samples (avoiding the need for retry/backoff, which would have
 > re-introduced the same measurement contamination the spec's own caveat
 > warns about) and an error handler. (2) **Confirmed as a real sequencing
-> gap, not yet fixed in this note** — this task's file list and Step 2a both
-> assume Task 4 (`runCompoundSetDecomposed` in `evals/run-evals.ts`) is
-> already implemented and merged into this branch. It is NOT — verified via
+> gap, now fixed** (this task's file list below and Step 2a both now state
+> it explicitly) — at the time of this review, this task's file list and
+> Step 2a had assumed Task 4 (`runCompoundSetDecomposed` in
+> `evals/run-evals.ts`) was already implemented and merged into this branch.
+> It was NOT — verified via
 > `grep -n "runCompoundSetDecomposed\|--decompose" evals/run-evals.ts`
 > returning zero matches at the time of this review. **Task 4 must be
 > executed (per its own section below) before Step 2a of this task can run**
@@ -1137,10 +1143,19 @@ N/9 to M/9 full-coverage in our eval. Single-topic questions are unaffected.
 
 In `docs/project-reviewer.md`, find the compound-question section (`grep -n -i "compound" docs/project-reviewer.md`) and extend it with 3–5 sentences: the measured baseline justified decomposition over raising k (2/9 questions unfixable at k=24); the elapsed-aware soft-deadline race bounds simple-question latency instead of leaving it at baseline exactly (a task-review + design-review finding worth mentioning as an interview talking point — the reference implementation's naive `Promise.all` would have blocked every request on decompose's full latency); the fallback contract means the decomposer can never make retrieval worse than today; before/after coverage numbers and the soft-deadline miss rate.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Commit (two commits — code and docs are different concerns)**
+
+First, the `evals/run-evals.ts` instrumentation from Step 2a (a second independent review flagged mixing this code change into a `docs:`-typed commit as a NIT — split it out):
 
 ```bash
-git add evals/run-evals.ts docs/superpowers/specs/2026-07-15-query-decomposition-design.md docs/project-reviewer.md README.md
+git add evals/run-evals.ts
+git commit -m "feat: soft-deadline miss-rate reporting in --decompose eval mode"
+```
+
+Then the docs/measurement-recording commit:
+
+```bash
+git add docs/superpowers/specs/2026-07-15-query-decomposition-design.md docs/project-reviewer.md README.md
 git commit -m "docs: record query-decomposition measurement + README update"
 ```
 
