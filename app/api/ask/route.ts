@@ -8,7 +8,8 @@ import {
   VISITOR_DAILY_LIMIT,
   visitorKey,
 } from "@/lib/rate-limit";
-import { isRelevant, searchChunks } from "@/lib/retrieval";
+import { decompose, DECOMPOSE_SOFT_DEADLINE_MS } from "@/lib/decompose";
+import { isRelevant, mergeResults, searchChunks, searchChunksBatch } from "@/lib/retrieval";
 import { SESSION_COOKIE, verifySessionToken, VISITOR_COOKIE } from "@/lib/session";
 import { serverSupabase } from "@/lib/supabase";
 
@@ -92,12 +93,40 @@ export async function POST(req: NextRequest): Promise<Response> {
   }
   const remaining = { visitor: Math.max(0, VISITOR_DAILY_LIMIT - counts.visitorCount) };
 
+  // Parallel decompose-and-retrieve, elapsed-aware soft deadline (spec §3):
+  // both calls fire concurrently; the route awaits baseline first (as it
+  // always did), then gives decompose only whatever's left of
+  // DECOMPOSE_SOFT_DEADLINE_MS since both calls started. If baseline alone
+  // already used the whole budget, an already-resolved decompose answer is
+  // used for free instead of being discarded by a fixed wall-clock cutoff.
+  // decompose() never rejects (lib/decompose.ts) — the only rejection this
+  // block can see is from searchChunks, which is fatal today too.
   let retrieval;
+  const decomposeStart = Date.now();
+  const subsPromise = decompose(question);
   try {
     retrieval = await searchChunks(question, 8);
   } catch (err) {
     console.error("retrieval failed", { question: question.slice(0, 80), err });
     return NextResponse.json({ error: UPSTREAM_ERROR }, { status: 502 });
+  }
+  const remainingMs = Math.max(0, DECOMPOSE_SOFT_DEADLINE_MS - (Date.now() - decomposeStart));
+  let softTimeoutId: ReturnType<typeof setTimeout>;
+  const softTimeout = new Promise<null>((resolve) => {
+    softTimeoutId = setTimeout(() => resolve(null), remainingMs);
+  });
+  const subQuestions = await Promise.race([subsPromise, softTimeout]);
+  clearTimeout(softTimeoutId!); // tidy up whichever side didn't win the race
+
+  // Compound path: retrieve per sub-question, merge with the baseline.
+  // Every failure lands on the baseline result already in hand (spec §6).
+  if (subQuestions && subQuestions.length >= 2) {
+    try {
+      const subResults = await searchChunksBatch(subQuestions, 8);
+      if (subResults.length > 0) retrieval = mergeResults([retrieval, ...subResults]);
+    } catch (err) {
+      console.error("sub-question retrieval failed", { question: question.slice(0, 80), err });
+    }
   }
 
   // Relevance gate (spec §6.4): off-topic and nonsense input never reaches

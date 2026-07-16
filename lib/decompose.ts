@@ -8,6 +8,13 @@ export const MAX_SUB_QUESTIONS = 4;
 export const DECOMPOSE_TIMEOUT_MS = 3_000;
 export const MAX_DECOMPOSE_TOKENS = 512;
 
+// Route-level deadline (app/api/ask/route.ts) for how long /api/ask waits on
+// this call before proceeding as simple for the current request — NOT a
+// property of decompose() itself, whose own contract (never rejects, this
+// file's ~3s hard budget above) is unchanged. See spec §3/§4. Initial
+// estimate pending Task 5's latency-sampling validation.
+export const DECOMPOSE_SOFT_DEADLINE_MS = 800;
+
 // Instructions only — the visitor's question goes in the user message as
 // data, never concatenated here (spec §8).
 export const DECOMPOSE_SYSTEM_PROMPT = `You split questions about the Laws of the Game (football/soccer rules) into retrieval-friendly sub-questions.
