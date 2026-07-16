@@ -954,16 +954,38 @@ git commit -m "feat: opt-in --decompose eval mode for the compound tier"
 > — the Execution notes' original dependency ordering ("Task 5 needs all")
 > already said this; this session's redesign work lost track of it along
 > the way.
+>
+> **Second design pass (2026-07-15, docs/decompose-latency-threshold branch,
+> after Task 5 was actually run):** running Steps 2a/2b as written above
+> found `DECOMPOSE_SOFT_DEADLINE_MS=800ms` had a **100% miss rate** (the
+> feature would be a near-total no-op in production). Raised to 2500ms and
+> re-measured: still 22%, above the 20% bar. Investigation into a fixable
+> root cause (hidden extended thinking, prompt-cache eligibility, structured-
+> output schema-compilation cost, `max_tokens` inflation) came back empty —
+> decompose's real latency floor (~1–3s for a live Haiku structured-output
+> call) is inherent, not a bug. **The actual root cause, found via Fable's
+> design input:** the miss-rate measurement itself had inadequate
+> statistical power. At n=9 (the two `--decompose` runs), "under 20%"
+> operationally means "at most 1 miss" — an effective ~11% bar — and even a
+> genuinely-passing ~11%-true-rate configuration only clears **both** runs
+> by chance about 55% of the time. The 22% result on the 2500ms run wasn't
+> strong evidence 2500ms is wrong; it was small-sample noise. **Steps
+> 2a–2c below are rewritten accordingly** — the miss-rate measurement no
+> longer reuses the `--decompose` eval runs; it's a dedicated, much larger,
+> and much cheaper decompose-only sample (see spec §10.4 for the full
+> derivation). `DECOMPOSE_SOFT_DEADLINE_MS` and `DECOMPOSE_TIMEOUT_MS` are
+> now set to informed working values (2500ms/4000ms, up from 800ms/3000ms)
+> up front, validated by measurement rather than discovered broken by it.
 
 **Files:**
-- Modify: `evals/run-evals.ts` (add soft-deadline timing to `runCompoundSetDecomposed` — **requires Task 4 to be complete first**, since that function doesn't exist until Task 4 builds it)
+- Modify: `lib/decompose.ts` (bump `DECOMPOSE_SOFT_DEADLINE_MS` to 2500 and `DECOMPOSE_TIMEOUT_MS` to 4000 — see Step 2a)
 - Modify: `docs/superpowers/specs/2026-07-15-query-decomposition-design.md` (revision history)
 - Modify: `docs/project-reviewer.md` (compound-question / decomposition talking point)
 - Modify: `README.md` (known-limitation line)
 
 **Interfaces:**
-- Consumes: everything above, complete and merged into the feature branch; `DECOMPOSE_SOFT_DEADLINE_MS` (`lib/decompose.ts`, Task 3).
-- Produces: recorded before/after numbers; the regression bar (spec §10, including the new §10.4 soft-deadline acceptance threshold) checked; docs updated.
+- Consumes: everything above, complete and merged into the feature branch; `DECOMPOSE_SOFT_DEADLINE_MS`/`DECOMPOSE_TIMEOUT_MS` (`lib/decompose.ts`, Tasks 1/3).
+- Produces: recorded before/after numbers; the regression bar (spec §10, including the revised §10.4 soft-deadline acceptance threshold AND its companion simple-question-latency bar) checked; docs updated.
 
 - [ ] **Step 1: Run the full regression gate**
 
@@ -979,86 +1001,76 @@ npm run eval
 
 Expected: golden 30/30 recall@8, paraphrase and abstain results identical to the recorded baseline (the default path is untouched code), everything else green. If ANY of these regress, STOP — the task is blocked; do not proceed to measurement.
 
-- [ ] **Step 2a: Add soft-deadline timing to the eval runner**
+- [ ] **Step 2a: Set the working constants**
 
-Spec §10.4 requires measuring how often `decompose()`'s real latency exceeds `DECOMPOSE_SOFT_DEADLINE_MS`, timed directly — NOT inferred from the eval harness's own elapsed wall-clock time, which is contaminated by `withVoyageRetry`'s 20s×attempt backoff on the *other* calls in the loop (the Voyage embed calls) and would make the miss rate look artificially low (Fable's design-review follow-up finding on PR #49). `decompose()` itself is never wrapped in `withVoyageRetry` — only `searchWithRetry`/the sub-question embed call are — so timing it directly, right where it's already called, gives the real number for free.
-
-In `evals/run-evals.ts`, add `DECOMPOSE_SOFT_DEADLINE_MS` to the existing import from `../lib/decompose`:
+In `lib/decompose.ts`, bump both timing constants to the values derived from the first measurement pass (see spec §4/§7 for the full rationale) — these are informed working values now, not the original naive estimates:
 
 ```typescript
-import { decompose, DECOMPOSE_SOFT_DEADLINE_MS } from "../lib/decompose";
+export const DECOMPOSE_TIMEOUT_MS = 4_000; // was 3_000 — a real call was clipped at exactly 3000ms
+export const DECOMPOSE_SOFT_DEADLINE_MS = 2_500; // was 800 — real measurement showed 800ms had a 100% miss rate
 ```
 
-Replace `runCompoundSetDecomposed` (from Task 4) with this version — the only changes are the added `decomposeStart`/`decomposeMs`/`softDeadlineMisses` tracking and the new summary line; coverage logic is untouched:
+Run: `npm test -- tests/decompose.test.ts && npx tsc --noEmit`
+Expected: PASS / clean — this is a plain literal change, no behavior beyond the two values.
+
+- [ ] **Step 2b: Run the compound coverage measurement**
+
+Run: `npm run eval -- --decompose` (twice, for the coverage nondeterminism check)
+
+Record from the summary block, for BOTH runs: baseline full coverage (expected 3/9), decomposed full coverage, both mean coverages, and the per-question line for the red-card question ("What happens if everyone on a team gets a red card?") including its sub-questions. Because the split is nondeterministic, if the two runs' full-coverage counts differ, record both and flag it in the PR description. This step is now purely about the coverage numbers (spec §10.2) — the soft-deadline miss rate is measured separately in Step 2c below, since reusing these n=9 runs for that purpose was the flawed approach from the first measurement pass (see the note above this task).
+
+- [ ] **Step 2c: Measure the soft-deadline miss rate on a dedicated, adequately-powered sample (spec §10.4)**
+
+The first measurement pass reused the two n=9 `--decompose` runs above for this bar and found it statistically underpowered — at n=9, "under 20%" is really an ~11% bar, and even a genuinely-passing configuration only clears both runs by chance ~55% of the time (see spec §10.4 for the full derivation). `decompose()` touches only the Anthropic API — no Voyage, no rate limiting — so a dedicated sample can run far more trials for negligible extra cost and takes no artificial spacing.
+
+Create a throwaway script (do not commit it) at `scripts/tmp-missrate-sample.ts`:
 
 ```typescript
-async function runCompoundSetDecomposed(compounds: CompoundQuestion[]): Promise<void> {
-  const K = 8;
-  let baseFull = 0;
-  let decFull = 0;
-  let baseSum = 0;
-  let decSum = 0;
-  let softDeadlineMisses = 0;
-  for (const c of compounds) {
-    const baseline = await searchWithRetry(c.question, K);
-    const decomposeStart = Date.now();
-    const subs = await decompose(c.question);
-    const decomposeMs = Date.now() - decomposeStart;
-    if (decomposeMs > DECOMPOSE_SOFT_DEADLINE_MS) softDeadlineMisses += 1;
-    let merged = baseline;
-    let subCount = 1;
-    if (subs && subs.length >= 2) {
-      subCount = subs.length;
-      const subResults = await withVoyageRetry(() => searchChunksBatch(subs, K));
-      if (subResults.length > 0) merged = mergeResults([baseline, ...subResults]);
-    }
-    const base = coverageScore(baseline.chunks, c.required);
-    const dec = coverageScore(merged.chunks, c.required);
-    baseSum += base.coverage;
-    decSum += dec.coverage;
-    if (base.missed.length === 0) baseFull += 1;
-    if (dec.missed.length === 0) decFull += 1;
-    console.log(
-      `base ${c.required.length - base.missed.length}/${c.required.length}` +
-        ` → decomposed ${c.required.length - dec.missed.length}/${c.required.length}` +
-        `  (${subCount} sub-question${subCount === 1 ? "" : "s"}, decompose ${decomposeMs}ms)  ${c.question}`,
-    );
-    if (subs && subs.length >= 2) console.log(`  subs: ${subs.join(" | ")}`);
-    if (dec.missed.length > 0) console.log(`  still missed: ${dec.missed.join(" | ")}`);
-  }
-  console.log(
-    `\n[compound --decompose] n=${compounds.length}, k=${K}/query, merged cap ${MERGED_CHUNK_CAP}:`,
+import { readFile } from "node:fs/promises";
+import { decompose, DECOMPOSE_SOFT_DEADLINE_MS } from "../lib/decompose";
+
+interface CompoundQuestion {
+  question: string;
+}
+
+async function main(): Promise<void> {
+  const compounds: CompoundQuestion[] = JSON.parse(
+    await readFile("evals/compound-questions.json", "utf8"),
   );
-  console.log(`  full coverage: baseline ${baseFull}/${compounds.length}` +
-    ` → decomposed ${decFull}/${compounds.length}`);
-  console.log(`  mean coverage: baseline ${(baseSum / compounds.length).toFixed(2)}` +
-    ` → decomposed ${(decSum / compounds.length).toFixed(2)}`);
-  const missRatePct = (softDeadlineMisses / compounds.length) * 100;
+  const CYCLES = 4; // 4 x 9 = 36 samples, n >= 36 per spec §10.4
+  let misses = 0;
+  let total = 0;
+  for (let cycle = 1; cycle <= CYCLES; cycle++) {
+    for (const { question } of compounds) {
+      const start = Date.now();
+      await decompose(question); // never rejects (Task 1 contract) -- no try/catch needed
+      const ms = Date.now() - start;
+      total += 1;
+      const missed = ms > DECOMPOSE_SOFT_DEADLINE_MS;
+      if (missed) misses += 1;
+      console.log(`cycle ${cycle}: ${ms}ms${missed ? "  MISS" : ""}  ${question.slice(0, 60)}`);
+    }
+  }
+  const missRatePct = (misses / total) * 100;
   console.log(
-    `  soft-deadline (${DECOMPOSE_SOFT_DEADLINE_MS}ms) miss rate: ${softDeadlineMisses}/${compounds.length}` +
-      ` (${missRatePct.toFixed(0)}%) — acceptance bar: must be under 20% (spec §10.4)`,
+    `\nsoft-deadline (${DECOMPOSE_SOFT_DEADLINE_MS}ms) miss rate: ${misses}/${total}` +
+      ` (${missRatePct.toFixed(1)}%) — acceptance bar: must be under 20% (spec §10.4)`,
   );
 }
+
+main().catch((err) => {
+  console.error(err);
+  process.exitCode = 1;
+});
 ```
 
-No new pure logic is introduced (this is timing instrumentation on an existing eval script, not product code) — no new unit test required, matching Task 4's own "no new pure logic → no new unit tests" note. Verification is running the mode (Step 2b below) — but since `tsx` doesn't typecheck ahead of time, run `npx tsc --noEmit` first to catch any slip in this edit before it lands in the commit (a second independent review, PR #50, flagged this step was otherwise the only one in the whole plan that edits real TypeScript without a typecheck immediately after).
+Run: `npx cross-env NODE_OPTIONS="--experimental-websocket --conditions=react-server" tsx --env-file=.env.local scripts/tmp-missrate-sample.ts` (same invocation shape as `npm run eval`, since this imports `server-only`-guarded modules). 36 sequential Anthropic calls, no artificial spacing needed (Anthropic's own rate limits are well above this volume) — takes roughly 1-2 minutes, costs well under a cent. Delete the script when done; it is throwaway.
 
-Run: `npx tsc --noEmit`
-Expected: clean (no new errors from this edit).
+**Regression bar §10.4 check:** if the miss rate is at or above 20%, this bar fails. **Do not raise `DECOMPOSE_SOFT_DEADLINE_MS` toward `DECOMPOSE_TIMEOUT_MS` to force a pass** — a soft deadline within noise of the hard timeout stops being a meaningful design element (spec §4). Instead STOP and escalate to Markus: the honest fallback per spec §10.4 is deleting the soft-deadline race entirely and simply awaiting `decompose()` under its hard timeout (the reverted `Promise.all` shape from earlier in this branch's history — reinstating it now would be a measured decision, not the unexamined default it was the first time). Do not proceed to Step 2d until this bar passes.
 
-- [ ] **Step 2b: Run the measurement**
+- [ ] **Step 2d: Sample simple-question latency under the soft-deadline race (spec §7, §10.4)**
 
-Run: `npm run eval -- --decompose` (twice, per the existing nondeterminism-check requirement below)
-
-Record from the summary block, for BOTH runs: baseline full coverage (expected 3/9), decomposed full coverage, both mean coverages, the per-question line for the red-card question ("What happens if everyone on a team gets a red card?") including its sub-questions, AND the new soft-deadline miss-rate line. Because the split is nondeterministic, if the two runs' full-coverage counts differ, record both and flag it in the PR description.
-
-**Regression bar §10.4 check:** if the miss rate is at or above 20% on EITHER run, this bar fails — STOP, do not proceed to Step 2c. Raise `DECOMPOSE_SOFT_DEADLINE_MS` in `lib/decompose.ts` (e.g. to 1200 or 1500ms) and re-run this step until both runs are under 20%, or escalate to Markus if raising the deadline doesn't help (which would suggest a deeper problem, not a tuning issue).
-
-- [ ] **Step 2c: Sample simple-question latency under the soft-deadline race (spec §7, §10.4)**
-
-Regression bar §10.4 requires BOTH the miss-rate measurement above AND confirming simple-question added latency is actually small in practice (Fable's design review on PR #50 found the plan's earlier revision measured only the miss rate and dropped this half — flagged as a BLOCKER). This must exercise the ACTUAL elapsed-aware mechanism from Task 3, not the old `Promise.all` shape.
-
-**Wait ~30s before starting this step** if Step 2b's runs just finished — a second independent review (PR #50) noted Step 2b's own Voyage calls (two full `--decompose` runs) can leave the free tier's rate window still hot, and this step's first call has no spacing before it (only between samples) since it assumes a clean slate.
+Regression bar §10.4 also requires a companion bar: simple-question added latency should stay small even with the higher soft deadline — a high miss-rate-passing deadline value is not automatically a good deadline if it makes ordinary questions slow. This must exercise the ACTUAL elapsed-aware mechanism from Task 3, not the old `Promise.all` shape.
 
 Create a throwaway script (do not commit it) at `scripts/tmp-latency-sample.ts`:
 
@@ -1115,14 +1127,14 @@ main().catch((err) => {
 
 Run: `npx cross-env NODE_OPTIONS="--experimental-websocket --conditions=react-server" tsx --env-file=.env.local scripts/tmp-latency-sample.ts` (same invocation shape as `npm run eval`, since this script also imports `server-only`-guarded modules). This spends ~10 extra Haiku calls (a small fraction of a cent) and takes ~3-4 minutes wall-clock (the 21s spacing) — acceptable within Task 5's already-budgeted paid steps. Delete the script when done; it is throwaway per this step's own instruction.
 
-Record the p50/max added-latency numbers (labeled "max," not "p95" — with only 10 samples, the 95th percentile is really just the largest observed value; calling it "p95" would overstate the statistical precision). If the max is comfortably sub-second (ideally near-zero, matching §7's "added wait ≈ 0 in the common case" framing), this half of the §10.4 bar passes. If it is not negligible, this is in tension with the miss-rate bar (raising `DECOMPOSE_SOFT_DEADLINE_MS` helps miss-rate but hurts latency, and vice versa) — if no single value satisfies both bars, STOP and escalate to Markus rather than picking one arbitrarily.
+Record the p50/max added-latency numbers (labeled "max," not "p95" — with only 10 samples, the 95th percentile is really just the largest observed value; calling it "p95" would overstate the statistical precision). **Acceptance threshold (spec §10.4, revised second pass): p50 added latency should be comfortably under 1500ms** — the spec's honest framing after real measurement is "~0.5–1.5s typical, capped ~2s," not "≈0" (§7). If p50 exceeds that, this is in tension with the miss-rate bar in Step 2c (raising `DECOMPOSE_SOFT_DEADLINE_MS` helps miss-rate but hurts this bar, and vice versa) — if no single value satisfies both, STOP and escalate to Markus rather than picking one arbitrarily.
 
 - [ ] **Step 3: Record the numbers in the spec's revision history**
 
 Append a row to the revision-history table in `docs/superpowers/specs/2026-07-15-query-decomposition-design.md`:
 
 ```markdown
-| 2026-MM-DD | Measured: compound full coverage N/9 → M/9 (mean 0.NN → 0.NN) with --decompose (run 1); N/9 → M/9 (run 2 if different); red-card question X/4 → Y/4. Soft-deadline (DECOMPOSE_SOFT_DEADLINE_MS=NNNms) miss rate: N/9 (P%) run 1, N/9 (P%) run 2 — under the 20% acceptance bar (spec §10.4). Simple-question added latency: p50 ~Nms, max ~Nms (n=10). |
+| 2026-MM-DD | Measured (second pass, n>=36 dedicated sample): compound full coverage N/9 → M/9 (mean 0.NN → 0.NN) with --decompose (run 1); N/9 → M/9 (run 2 if different); red-card question X/4 → Y/4. Soft-deadline (DECOMPOSE_SOFT_DEADLINE_MS=2500ms, DECOMPOSE_TIMEOUT_MS=4000ms) miss rate on n=NN dedicated sample: N/NN (P%) — under the 20% acceptance bar (spec §10.4). Simple-question added latency: p50 ~Nms, max ~Nms (n=10) — under the 1500ms companion bar. |
 ```
 
 (Fill the real values; keep the date current.)
@@ -1145,11 +1157,11 @@ In `docs/project-reviewer.md`, find the compound-question section (`grep -n -i "
 
 - [ ] **Step 6: Commit (two commits — code and docs are different concerns)**
 
-First, the `evals/run-evals.ts` instrumentation from Step 2a (a second independent review flagged mixing this code change into a `docs:`-typed commit as a NIT — split it out):
+First, the `lib/decompose.ts` constant change from Step 2a (code and docs are different concerns — keep them in separate commits, same discipline as the rest of this task):
 
 ```bash
-git add evals/run-evals.ts
-git commit -m "feat: soft-deadline miss-rate reporting in --decompose eval mode"
+git add lib/decompose.ts
+git commit -m "fix: raise decompose soft-deadline and hard-timeout constants per measurement"
 ```
 
 Then the docs/measurement-recording commit:
@@ -1158,6 +1170,8 @@ Then the docs/measurement-recording commit:
 git add docs/superpowers/specs/2026-07-15-query-decomposition-design.md docs/project-reviewer.md README.md
 git commit -m "docs: record query-decomposition measurement + README update"
 ```
+
+(Neither throwaway script — `scripts/tmp-missrate-sample.ts` from Step 2c, `scripts/tmp-latency-sample.ts` from Step 2d — should be present at this point; confirm both were deleted after use.)
 
 - [ ] **Step 7: HUMAN CHECKPOINT — end-to-end acceptance (blocking)**
 
