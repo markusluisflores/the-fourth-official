@@ -324,26 +324,39 @@ user-input→LLM surface.
 
    **Current measurement:** a throwaway script (Task 5) times `decompose()`
    directly (`Date.now()` around the call, no harness involvement) against
-   all 9 compound-tier questions, cycled **4–5× each (n ≥ 36)**, recording
-   for each call whether its raw latency exceeded `DECOMPOSE_SOFT_DEADLINE_MS`
-   (2500ms — §4). Takes roughly 2 minutes, costs well under a cent. **Sample
-   size caveat, honestly disclosed:** n≥36 gives ~3% granularity, still not
-   a large-N guarantee — good enough to make an informed constant choice for
-   a 20-questions/day demo, not a rigorously powered statistical test. If
-   Markus wants tighter confidence, the same script scales to a larger n at
-   the same per-call cost.
+   all 9 compound-tier questions, cycled **8× each (n = 72)**, recording for
+   each call whether its raw latency exceeded `DECOMPOSE_SOFT_DEADLINE_MS`
+   (2500ms — §4), and whether the result was suspiciously fast-and-null (a
+   likely API/auth error masquerading as a fast success — a real false-pass
+   risk an independent review, PR #56, caught: `decompose()` never rejects,
+   so a broken API key resolves near-instantly to `null` for every call,
+   which would otherwise look like a perfect 0% miss rate). Takes roughly
+   2-3 minutes, costs well under a cent. **Sample size caveat, honestly
+   disclosed:** n=72 gives ~2% granularity, still not a large-N guarantee —
+   good enough to make an informed constant choice for a 20-questions/day
+   demo, not a rigorously powered statistical test. If Markus wants tighter
+   confidence, the same script scales to a larger n at the same per-call
+   cost.
 
-   **Acceptance threshold: miss rate must be under 20% on the n≥36 sample.**
-   If it's at or above 20%: **do not creep `DECOMPOSE_SOFT_DEADLINE_MS` toward
-   `DECOMPOSE_TIMEOUT_MS`** (a soft deadline within noise of the hard timeout
-   is no longer a meaningful design element — see §4's rationale for keeping
-   them distinct). Instead, treat that result as evidence the "short soft
-   deadline, well under the worst case" concept has no viable value for this
-   specific call, and escalate to Markus: the honest fallback is deleting the
-   soft-deadline race entirely and simply awaiting `decompose()` under its
-   hard timeout (this was the reverted `Promise.all` shape from earlier in
-   this branch's history — reinstating it would then be a *measured decision*,
-   not the unexamined default it was the first time).
+   **Acceptance threshold: miss rate must be under 20% on the n=72 sample.**
+   - **A modest overshoot (20-30%)** is a borderline result, not proof the
+     mechanism is unworkable — a 25% miss rate still means the feature helps
+     75% of genuinely compound questions. Try one bounded further increase to
+     `DECOMPOSE_SOFT_DEADLINE_MS` (e.g. +500ms) and re-measure once. **Do not
+     creep it repeatedly** toward `DECOMPOSE_TIMEOUT_MS` — a soft deadline
+     within noise of the hard timeout is no longer a meaningful design
+     element (see §4's rationale for keeping them distinct).
+   - **A substantial miss rate (roughly ≥30-40%), or a bounded increase that
+     doesn't help,** is the real signal to stop tuning and escalate to
+     Markus. The honest fallback is deleting the soft-deadline race entirely
+     and simply awaiting `decompose()` under its hard timeout (this was the
+     reverted `Promise.all` shape from earlier in this branch's history —
+     reinstating it would then be a *measured decision*, not the unexamined
+     default it was the first time). **This fallback explicitly abandons the
+     companion latency bar below, not a latency-neutral alternative** — every
+     question, not just compound ones, would pay up to the full hard timeout
+     in exchange for perfect compound detection; be explicit about that
+     tradeoff when presenting it to Markus.
 
    **Companion bar — simple-question added latency must also pass, not just
    the miss rate:** the miss-rate bar alone doesn't bound the actual user-
@@ -356,7 +369,7 @@ user-input→LLM surface.
    bar over the other unilaterally.
 
    Numbers recorded in this spec's revision history alongside the coverage
-   numbers: n≥36 sample's miss rate, p50/max simple-question added latency,
+   numbers: n=72 sample's miss rate, p50/max simple-question added latency,
    and the final `DECOMPOSE_SOFT_DEADLINE_MS`/`DECOMPOSE_TIMEOUT_MS` values
    (2500ms/4000ms are the working values pending this measurement — see §4).
 
@@ -396,3 +409,4 @@ session per the established split.
 | 2026-07-15 | Fable's design review (PR #49) approved the mechanism but found 1 BLOCKER + 3 SUGGESTIONs: (1, BLOCKER, fixed) added an acceptance threshold (§10.4, <20% soft-deadline miss rate on the compound tier) instead of only recording the miss rate — as written, the eval's coverage number (§10.2) could pass while the soft deadline silently disabled compound detection in production; §10.2 now notes the eval number is an upper bound, not a guarantee, on production. (2, SUGGESTION, adopted) refined the soft deadline from a fixed wall-clock cutoff to one measured from elapsed wait since both calls started (§3, §4) — same worst-case latency bound, strictly fewer timing-dependent misses, since a decompose result that arrives while the route is still stuck waiting on a slow baseline is no longer wastefully discarded. (3, SUGGESTION, adopted) softened §7's "usually fast" framing — the soft deadline races decompose's full non-streaming completion, not time-to-first-token. (4, SUGGESTION, adopted) clarified why the ~3s hard budget still matters post-redesign (§4): it bounds the abandoned background call's resource lifetime and remains the only timing guard on the eval's `--decompose` mode. Two NITs also fixed: §7's latency formula was mislabeled "added" when it described total latency; §11's deliverables checklist now names the soft-deadline race and the miss-rate measurement explicitly. |
 | 2026-07-15 | Fable's follow-up re-review (PR #49) confirmed the BLOCKER fix and the elapsed-aware deadline math, and approved with one new SUGGESTION (adopted): the eval harness's own `withVoyageRetry` backoff can inflate its "baseline" elapsed time to tens of seconds under the elapsed-aware formula, far looser than production's normally-sub-second `searchChunks` — so reusing the two `--decompose` eval runs verbatim for §10.4's miss-rate measurement would likely understate real production risk, making the 20% threshold decorative. §10.4 now requires Task 5 to measure `decompose()`'s raw latency directly against the fixed soft deadline for this specific bar, not the harness's own inflated elapsed time. Zero BLOCKERs remain — approved for merge. |
 | 2026-07-15 | **Second design pass, after real measurement (docs/decompose-latency-threshold branch, off feat/query-decomposition):** Task 5 measured `DECOMPOSE_SOFT_DEADLINE_MS` at its shipped 800ms and found a 100% miss rate — the feature would be a near-total no-op in production. Raised to 2500ms and re-measured: still 22% (above the 20% bar). Investigation into a fixable root cause (hidden extended thinking, missing prompt-cache eligibility, first-request schema-compilation cost, `max_tokens` inflation) came back empty — decompose's real latency floor (~1–3s for a live Haiku structured-output call) appears to be inherent, not a bug. Fable's design input identified the actual root cause: at n=9, "under 20%" is really an ~11% bar, and even a genuinely-passing configuration only clears both measurement runs by chance ~55% of the time — the 22% result wasn't strong evidence 2500ms is wrong, just small-sample noise. Resolution: keep 2500ms/4000ms (`DECOMPOSE_SOFT_DEADLINE_MS`/`DECOMPOSE_TIMEOUT_MS`, up from 800ms/3000ms) as working values, replace the n=9 reused-eval-run measurement with a dedicated n≥36 decompose-only sample (§10.4) for adequate statistical power, add a companion acceptance bar on simple-question added latency (p50 < 1500ms) so both sides of the tradeoff have a pass/fail line, and pre-commit to an escalation path (delete the soft-deadline race, don't creep the deadline toward the hard timeout) if the larger sample still fails. §2 Goal 2 and §7 rewritten to state the honest common-case added latency (~0.5–1.5s, capped ~2s) instead of "≈0". Pending Fable's review of this revision before merge back into `feat/query-decomposition`. |
+| 2026-07-15 | Fable's fresh-context review (PR #56) verified the n=9 statistics claim independently (confirmed correct, and noted it understates the problem at higher true miss rates) and found 1 BLOCKER + 3 SUGGESTIONs: (1, BLOCKER, fixed) both new throwaway sampling scripts (§10.4) could print a false-passing 0% miss rate if `ANTHROPIC_API_KEY` were missing/invalid — `decompose()` never rejects (Task 1 contract), so a broken key resolves every call to `null` in ~0ms, which looked identical to genuinely fast, successful calls. Fixed: both scripts now fail fast if the key is unset, track null-result counts, and warn if null results average under 200ms (a strong signal of an error, not a genuine timeout/refusal). (2, SUGGESTION, adopted) raised the miss-rate sample from n=36 (4 cycles) to n=72 (8 cycles) — marginal cost ~1 more minute for meaningfully tighter statistical power. (3, SUGGESTION, adopted) softened the escalation rule: a modest 20-30% miss rate now gets one bounded further deadline increase and a re-measure, rather than immediately treating any ≥20% result as proof the mechanism is unworkable; only a substantial miss rate (≥30-40%) or a bounded increase that doesn't help triggers escalation to Markus. (4, SUGGESTION, adopted) made explicit that the escalation fallback (deleting the soft-deadline race) abandons the companion latency bar by design — it's the opposite tradeoff, not a latency-neutral alternative. Fixes applied; pending Fable's confirmation before merge. |

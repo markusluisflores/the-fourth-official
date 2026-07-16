@@ -1034,21 +1034,38 @@ interface CompoundQuestion {
 }
 
 async function main(): Promise<void> {
+  // decompose() never rejects (Task 1 contract) -- it resolves to null on
+  // EVERY failure mode, including a missing/invalid ANTHROPIC_API_KEY. That
+  // means a broken key would make every call fail near-instantly, all well
+  // under the deadline, printing a perfect-looking 0% miss rate that's
+  // actually measuring nothing (an independent review, PR #56, caught this
+  // exact false-pass risk). Fail fast instead of measuring garbage:
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error("ANTHROPIC_API_KEY is not set -- this script requires a live Anthropic call");
+  }
   const compounds: CompoundQuestion[] = JSON.parse(
     await readFile("evals/compound-questions.json", "utf8"),
   );
-  const CYCLES = 4; // 4 x 9 = 36 samples, n >= 36 per spec §10.4
+  const CYCLES = 8; // 8 x 9 = 72 samples -- marginal cost over 36 is ~1 more minute for meaningfully tighter power (PR #56 review)
   let misses = 0;
   let total = 0;
+  let nullResults = 0;
+  let nullResultMsSum = 0;
   for (let cycle = 1; cycle <= CYCLES; cycle++) {
     for (const { question } of compounds) {
       const start = Date.now();
-      await decompose(question); // never rejects (Task 1 contract) -- no try/catch needed
+      const subs = await decompose(question);
       const ms = Date.now() - start;
       total += 1;
+      if (subs === null) {
+        nullResults += 1;
+        nullResultMsSum += ms;
+      }
       const missed = ms > DECOMPOSE_SOFT_DEADLINE_MS;
       if (missed) misses += 1;
-      console.log(`cycle ${cycle}: ${ms}ms${missed ? "  MISS" : ""}  ${question.slice(0, 60)}`);
+      console.log(
+        `cycle ${cycle}: ${ms}ms${missed ? "  MISS" : ""}${subs === null ? "  (null result)" : ""}  ${question.slice(0, 60)}`,
+      );
     }
   }
   const missRatePct = (misses / total) * 100;
@@ -1056,6 +1073,25 @@ async function main(): Promise<void> {
     `\nsoft-deadline (${DECOMPOSE_SOFT_DEADLINE_MS}ms) miss rate: ${misses}/${total}` +
       ` (${missRatePct.toFixed(1)}%) — acceptance bar: must be under 20% (spec §10.4)`,
   );
+  if (nullResults > 0) {
+    const avgNullMs = Math.round(nullResultMsSum / nullResults);
+    console.log(
+      `null-result rate: ${nullResults}/${total} (${((nullResults / total) * 100).toFixed(1)}%),` +
+        ` avg latency of null results: ${avgNullMs}ms`,
+    );
+    // A genuine timeout/refusal null takes real time (near the soft deadline
+    // or the ~4s hard timeout). A null averaging well under that is not a
+    // real measurement of decompose's behavior -- it's an error (bad key,
+    // persistent 401/429, network failure) masquerading as a fast success.
+    if (avgNullMs < 200) {
+      console.error(
+        `\nWARNING: null results averaged only ${avgNullMs}ms -- this looks like an` +
+          ` API/auth error, not a genuine timeout or refusal. Do NOT trust the miss-rate` +
+          ` number above until this is investigated and fixed (check ANTHROPIC_API_KEY,` +
+          ` network access, and rate-limit status before re-running).`,
+      );
+    }
+  }
 }
 
 main().catch((err) => {
@@ -1064,9 +1100,13 @@ main().catch((err) => {
 });
 ```
 
-Run: `npx cross-env NODE_OPTIONS="--experimental-websocket --conditions=react-server" tsx --env-file=.env.local scripts/tmp-missrate-sample.ts` (same invocation shape as `npm run eval`, since this imports `server-only`-guarded modules). 36 sequential Anthropic calls, no artificial spacing needed (Anthropic's own rate limits are well above this volume) — takes roughly 1-2 minutes, costs well under a cent. Delete the script when done; it is throwaway.
+Run: `npx cross-env NODE_OPTIONS="--experimental-websocket --conditions=react-server" tsx --env-file=.env.local scripts/tmp-missrate-sample.ts` (same invocation shape as `npm run eval`, since this imports `server-only`-guarded modules). 72 sequential Anthropic calls, no artificial spacing needed (Anthropic's own rate limits are well above this volume) — takes roughly 2-3 minutes, costs well under a cent. Delete the script when done; it is throwaway. **Before trusting the miss-rate number, check the null-result warning** — if it fired, fix the underlying issue and re-run rather than recording a number that may reflect API errors, not real latency.
 
-**Regression bar §10.4 check:** if the miss rate is at or above 20%, this bar fails. **Do not raise `DECOMPOSE_SOFT_DEADLINE_MS` toward `DECOMPOSE_TIMEOUT_MS` to force a pass** — a soft deadline within noise of the hard timeout stops being a meaningful design element (spec §4). Instead STOP and escalate to Markus: the honest fallback per spec §10.4 is deleting the soft-deadline race entirely and simply awaiting `decompose()` under its hard timeout (the reverted `Promise.all` shape from earlier in this branch's history — reinstating it now would be a measured decision, not the unexamined default it was the first time). Do not proceed to Step 2d until this bar passes.
+**Regression bar §10.4 check:** if the miss rate is at or above 20%, this bar fails.
+- **A modest overshoot (20-30%)** is a borderline result, not proof the mechanism is unworkable — a 25% miss rate still means the feature helps 75% of genuinely compound questions. Try one bounded further increase to `DECOMPOSE_SOFT_DEADLINE_MS` (e.g. +500ms) and re-measure once. **Do not creep it repeatedly** toward `DECOMPOSE_TIMEOUT_MS` — a soft deadline within noise of the hard timeout stops being a meaningful design element (spec §4).
+- **A substantial miss rate (roughly ≥30-40%), or a bounded increase that doesn't help,** is the real signal to stop tuning and escalate to Markus. The honest fallback per spec §10.4 is deleting the soft-deadline race entirely and simply awaiting `decompose()` under its hard timeout (the reverted `Promise.all` shape from earlier in this branch's history — reinstating it now would be a measured decision, not the unexamined default it was the first time). **Be explicit with Markus that this fallback abandons Step 2d's companion latency bar by design** (PR #56 review) — it's not a latency-neutral alternative, it's the opposite tradeoff: every question, not just compound ones, pays up to the full ~4s hard timeout in exchange for perfect compound detection.
+
+Do not proceed to Step 2d until this bar passes (with or without the one bounded adjustment above).
 
 - [ ] **Step 2d: Sample simple-question latency under the soft-deadline race (spec §7, §10.4)**
 
@@ -1086,9 +1126,18 @@ interface GoldenQuestion {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function main(): Promise<void> {
+  // Same false-pass risk as Step 2c's script: decompose() never rejects, so
+  // a broken ANTHROPIC_API_KEY would make subsPromise resolve to null almost
+  // instantly, winning Promise.race trivially and making addedMs look
+  // artificially small -- a "great" number that's actually measuring an
+  // error, not real latency (PR #56 review). Fail fast instead:
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error("ANTHROPIC_API_KEY is not set -- this script requires a live Anthropic call");
+  }
   const golden: GoldenQuestion[] = JSON.parse(await readFile("evals/golden-questions.json", "utf8"));
   const sample = golden.slice(0, 10);
   const addedMsSamples: number[] = [];
+  let nullResults = 0;
   for (let i = 0; i < sample.length; i++) {
     // Space calls 21s apart -- Voyage's free tier is 3 requests/minute (one
     // every ~20s) -- so this raw, single-attempt timing never hits a 429 and
@@ -1107,16 +1156,27 @@ async function main(): Promise<void> {
     const baselineMs = Date.now() - baselineStart;
     const remainingMs = Math.max(0, DECOMPOSE_SOFT_DEADLINE_MS - (Date.now() - decomposeStart));
     const softTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), remainingMs));
-    await Promise.race([subsPromise, softTimeout]);
+    const subs = await Promise.race([subsPromise, softTimeout]);
     const totalMs = Date.now() - decomposeStart;
     const addedMs = Math.max(0, totalMs - baselineMs);
     addedMsSamples.push(addedMs);
-    console.log(`${question.slice(0, 60)}  baseline=${baselineMs}ms total=${totalMs}ms added=${addedMs}ms`);
+    if (subs === null && totalMs < 200) nullResults += 1; // fast null = likely an error, not a genuine timeout
+    console.log(
+      `${question.slice(0, 60)}  baseline=${baselineMs}ms total=${totalMs}ms added=${addedMs}ms` +
+        `${subs === null ? "  (null result)" : ""}`,
+    );
   }
   const sorted = [...addedMsSamples].sort((a, b) => a - b);
   const p50 = sorted[Math.floor(sorted.length * 0.5)];
   const max = sorted[sorted.length - 1];
   console.log(`\nsimple-question added latency (n=${sample.length}): p50=${p50}ms max=${max}ms`);
+  if (nullResults > 0) {
+    console.error(
+      `\nWARNING: ${nullResults}/${sample.length} calls returned a null decompose result in` +
+        ` under 200ms -- this looks like an API/auth error, not genuine fast latency. Do NOT` +
+        ` trust the added-latency numbers above until this is investigated and fixed.`,
+    );
+  }
 }
 
 main().catch((err) => {
@@ -1134,7 +1194,7 @@ Record the p50/max added-latency numbers (labeled "max," not "p95" — with only
 Append a row to the revision-history table in `docs/superpowers/specs/2026-07-15-query-decomposition-design.md`:
 
 ```markdown
-| 2026-MM-DD | Measured (second pass, n>=36 dedicated sample): compound full coverage N/9 → M/9 (mean 0.NN → 0.NN) with --decompose (run 1); N/9 → M/9 (run 2 if different); red-card question X/4 → Y/4. Soft-deadline (DECOMPOSE_SOFT_DEADLINE_MS=2500ms, DECOMPOSE_TIMEOUT_MS=4000ms) miss rate on n=NN dedicated sample: N/NN (P%) — under the 20% acceptance bar (spec §10.4). Simple-question added latency: p50 ~Nms, max ~Nms (n=10) — under the 1500ms companion bar. |
+| 2026-MM-DD | Measured (second pass, n=72 dedicated sample): compound full coverage N/9 → M/9 (mean 0.NN → 0.NN) with --decompose (run 1); N/9 → M/9 (run 2 if different); red-card question X/4 → Y/4. Soft-deadline (DECOMPOSE_SOFT_DEADLINE_MS=2500ms, DECOMPOSE_TIMEOUT_MS=4000ms) miss rate on n=72 dedicated sample: N/72 (P%) — under the 20% acceptance bar (spec §10.4). Simple-question added latency: p50 ~Nms, max ~Nms (n=10) — under the 1500ms companion bar. |
 ```
 
 (Fill the real values; keep the date current.)
