@@ -1003,15 +1003,28 @@ Expected: golden 30/30 recall@8, paraphrase and abstain results identical to the
 
 - [ ] **Step 2a: Set the working constants**
 
-In `lib/decompose.ts`, bump both timing constants to the values derived from the first measurement pass (see spec §4/§7 for the full rationale) — these are informed working values now, not the original naive estimates:
+In `lib/decompose.ts`, bump both timing constants to the values derived from the first measurement pass (see spec §4/§7 for the full rationale) — these are informed working values now, not the original naive estimates. Update the values themselves AND the doc-comments above them (a PR #56 review noted the original comments describe a now-stale state — "Initial estimate pending Task 5's latency-sampling validation" reads as if validation hasn't happened yet, when it's this very step, and "this file's ~3s hard budget" is now wrong once `DECOMPOSE_TIMEOUT_MS` changes):
+
+Replace line 8 (`export const DECOMPOSE_TIMEOUT_MS = 3_000;`) with:
 
 ```typescript
-export const DECOMPOSE_TIMEOUT_MS = 4_000; // was 3_000 — a real call was clipped at exactly 3000ms
-export const DECOMPOSE_SOFT_DEADLINE_MS = 2_500; // was 800 — real measurement showed 800ms had a 100% miss rate
+export const DECOMPOSE_TIMEOUT_MS = 4_000; // was 3_000 -- a real measured call was clipped at exactly 3000ms by this timeout (Task 5, second measurement pass)
+```
+
+Replace the comment block and value above `DECOMPOSE_SOFT_DEADLINE_MS` (currently lines 11-16: "Route-level deadline ... Initial estimate pending Task 5's latency-sampling validation.") with:
+
+```typescript
+// Route-level deadline (app/api/ask/route.ts) for how long /api/ask waits on
+// this call before proceeding as simple for the current request — NOT a
+// property of decompose() itself, whose own contract (never rejects, this
+// file's ~4s hard budget above) is unchanged. See spec §3/§4/§7/§10.4.
+// 2500ms is the working value validated by Task 5's second measurement pass
+// (n=72 dedicated sample, spec §10.4) — not the original 800ms guess.
+export const DECOMPOSE_SOFT_DEADLINE_MS = 2_500;
 ```
 
 Run: `npm test -- tests/decompose.test.ts && npx tsc --noEmit`
-Expected: PASS / clean — this is a plain literal change, no behavior beyond the two values.
+Expected: PASS / clean — this is a plain literal + comment change, no behavior beyond the two values.
 
 - [ ] **Step 2b: Run the compound coverage measurement**
 
@@ -1103,8 +1116,8 @@ main().catch((err) => {
 Run: `npx cross-env NODE_OPTIONS="--experimental-websocket --conditions=react-server" tsx --env-file=.env.local scripts/tmp-missrate-sample.ts` (same invocation shape as `npm run eval`, since this imports `server-only`-guarded modules). 72 sequential Anthropic calls, no artificial spacing needed (Anthropic's own rate limits are well above this volume) — takes roughly 2-3 minutes, costs well under a cent. Delete the script when done; it is throwaway. **Before trusting the miss-rate number, check the null-result warning** — if it fired, fix the underlying issue and re-run rather than recording a number that may reflect API errors, not real latency.
 
 **Regression bar §10.4 check:** if the miss rate is at or above 20%, this bar fails.
-- **A modest overshoot (20-30%)** is a borderline result, not proof the mechanism is unworkable — a 25% miss rate still means the feature helps 75% of genuinely compound questions. Try one bounded further increase to `DECOMPOSE_SOFT_DEADLINE_MS` (e.g. +500ms) and re-measure once. **Do not creep it repeatedly** toward `DECOMPOSE_TIMEOUT_MS` — a soft deadline within noise of the hard timeout stops being a meaningful design element (spec §4).
-- **A substantial miss rate (roughly ≥30-40%), or a bounded increase that doesn't help,** is the real signal to stop tuning and escalate to Markus. The honest fallback per spec §10.4 is deleting the soft-deadline race entirely and simply awaiting `decompose()` under its hard timeout (the reverted `Promise.all` shape from earlier in this branch's history — reinstating it now would be a measured decision, not the unexamined default it was the first time). **Be explicit with Markus that this fallback abandons Step 2d's companion latency bar by design** (PR #56 review) — it's not a latency-neutral alternative, it's the opposite tradeoff: every question, not just compound ones, pays up to the full ~4s hard timeout in exchange for perfect compound detection.
+- **20% up to (but not including) 30%** is a borderline result, not proof the mechanism is unworkable — a 25% miss rate still means the feature helps 75% of genuinely compound questions. Do exactly this once: edit `lib/decompose.ts`, change `DECOMPOSE_SOFT_DEADLINE_MS` from `2_500` to `3_000` (a single bounded +500ms step), re-run `scripts/tmp-missrate-sample.ts` from Step 2c. If the new miss rate is under 20%, proceed to Step 2d with the new value. **Do not repeat this step a second time** — if 3000ms still doesn't clear the bar, that's a substantial-miss-rate result per the next bullet, not another candidate for a further +500ms bump; creeping the deadline repeatedly toward `DECOMPOSE_TIMEOUT_MS` (4000ms) erodes the distinction the two constants are meant to preserve (spec §4).
+- **30% or higher (including a second miss rate after the one bounded retry above didn't help)** is the real signal to stop tuning and escalate to Markus. The honest fallback per spec §10.4 is deleting the soft-deadline race entirely and simply awaiting `decompose()` under its hard timeout (the reverted `Promise.all` shape from earlier in this branch's history — reinstating it now would be a measured decision, not the unexamined default it was the first time). **Be explicit with Markus that this fallback abandons Step 2d's companion latency bar by design** (PR #56 review) — it's not a latency-neutral alternative, it's the opposite tradeoff: every question, not just compound ones, pays up to the full ~4s hard timeout in exchange for perfect compound detection.
 
 Do not proceed to Step 2d until this bar passes (with or without the one bounded adjustment above).
 
@@ -1150,7 +1163,24 @@ async function main(): Promise<void> {
     const { question } = sample[i];
     // Mirrors app/api/ask/route.ts's retrieval block exactly (Task 3).
     const decomposeStart = Date.now();
-    const subsPromise = decompose(question);
+    // Track decompose()'s OWN settle time via .then(), independent of the
+    // race below. A follow-up review on PR #56 caught that checking
+    // totalMs (elapsed since BOTH calls started, dominated by baseline
+    // retrieval's own latency) never actually detects a fast decompose
+    // failure -- baseline alone is normally well over 200ms, so the
+    // false-pass bug this script exists to catch would have gone
+    // undetected here even after the first fix. decomposeMs/decomposeResult
+    // only populate once decompose() itself resolves -- if the soft
+    // deadline wins the race instead, they're still null at check-time
+    // below, which correctly means "no error signal available yet," not
+    // "no error occurred."
+    let decomposeMs: number | null = null;
+    let decomposeResult: string[] | null = null;
+    const subsPromise = decompose(question).then((result) => {
+      decomposeMs = Date.now() - decomposeStart;
+      decomposeResult = result;
+      return result;
+    });
     const baselineStart = Date.now();
     await searchChunks(question, 8);
     const baselineMs = Date.now() - baselineStart;
@@ -1160,10 +1190,16 @@ async function main(): Promise<void> {
     const totalMs = Date.now() - decomposeStart;
     const addedMs = Math.max(0, totalMs - baselineMs);
     addedMsSamples.push(addedMs);
-    if (subs === null && totalMs < 200) nullResults += 1; // fast null = likely an error, not a genuine timeout
+    // Fires only when decompose() itself already settled (not when the soft
+    // deadline won instead) AND its own result was null AND its own
+    // duration was fast -- the actual signal of a likely API/auth error.
+    if (decomposeMs !== null && decomposeResult === null && decomposeMs < 200) {
+      nullResults += 1;
+    }
     console.log(
       `${question.slice(0, 60)}  baseline=${baselineMs}ms total=${totalMs}ms added=${addedMs}ms` +
-        `${subs === null ? "  (null result)" : ""}`,
+        `${subs === null ? "  (raced-out null)" : ""}` +
+        `${decomposeMs !== null ? `  decompose=${decomposeMs}ms` : "  decompose=still pending"}`,
     );
   }
   const sorted = [...addedMsSamples].sort((a, b) => a - b);
