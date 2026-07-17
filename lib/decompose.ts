@@ -5,15 +5,16 @@ import Anthropic from "@anthropic-ai/sdk";
 // model must never silently make the splitter 25x more expensive (spec §4).
 export const DECOMPOSE_MODEL = "claude-haiku-4-5";
 export const MAX_SUB_QUESTIONS = 4;
-export const DECOMPOSE_TIMEOUT_MS = 3_000;
+export const DECOMPOSE_TIMEOUT_MS = 4_000; // was 3_000 -- a real measured call was clipped at exactly 3000ms by this timeout (Task 5, second measurement pass)
 export const MAX_DECOMPOSE_TOKENS = 512;
 
 // Route-level deadline (app/api/ask/route.ts) for how long /api/ask waits on
 // this call before proceeding as simple for the current request — NOT a
 // property of decompose() itself, whose own contract (never rejects, this
-// file's ~3s hard budget above) is unchanged. See spec §3/§4. Initial
-// estimate pending Task 5's latency-sampling validation.
-export const DECOMPOSE_SOFT_DEADLINE_MS = 800;
+// file's ~4s hard budget above) is unchanged. See spec §3/§4/§7/§10.4.
+// 2500ms is the working value validated by Task 5's second measurement pass
+// (n=72 dedicated sample, spec §10.4) — not the original 800ms guess.
+export const DECOMPOSE_SOFT_DEADLINE_MS = 2_500;
 
 // Instructions only — the visitor's question goes in the user message as
 // data, never concatenated here (spec §8).
