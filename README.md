@@ -32,12 +32,12 @@ embeddings · Claude Haiku 4.5 with `citations: {enabled: true}` · Vitest · Ra
 
 ## Known limitations
 
-- Compound questions spanning several laws at once (e.g. "what happens if
-  everyone gets a red card?") can exceed what single-pass k=8 retrieval
-  covers: answers cite accurately what was retrieved but may not assemble
-  every relevant law. Measured honestly by the eval harness's compound tier
-  (`npm run eval`); design + baseline:
-  `docs/superpowers/specs/2026-07-14-compound-question-eval-design.md`.
+- Compound questions (several rules at once) are split into sub-questions
+  behind the scenes and retrieved per concept; hard multi-law questions
+  improved from 3/9 to 5–7/9 full-coverage in our eval (nondeterministic —
+  see the eval harness's `--decompose` mode). Single-topic questions are
+  unaffected. Design: `docs/superpowers/specs/2026-07-15-query-decomposition-design.md`;
+  baseline measurement: `docs/superpowers/specs/2026-07-14-compound-question-eval-design.md`.
 
 ## Development
 
