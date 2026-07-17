@@ -35,8 +35,10 @@ embeddings · Claude Haiku 4.5 with `citations: {enabled: true}` · Vitest · Ra
 - Compound questions (several rules at once) are split into sub-questions
   behind the scenes and retrieved per concept; hard multi-law questions
   improved from 3/9 to 5–7/9 full-coverage in our eval (nondeterministic —
-  see the eval harness's `--decompose` mode). Single-topic questions are
-  unaffected. Design: `docs/superpowers/specs/2026-07-15-query-decomposition-design.md`;
+  see the eval harness's `--decompose` mode). Single-topic questions get the
+  same retrieval results; every question waits up to ~2.5s extra for the
+  splitter (typically under a second, p50 ~0.8s measured) before falling back.
+  Design: `docs/superpowers/specs/2026-07-15-query-decomposition-design.md`;
   baseline measurement: `docs/superpowers/specs/2026-07-14-compound-question-eval-design.md`.
 
 ## Development

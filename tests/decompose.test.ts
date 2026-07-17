@@ -66,6 +66,14 @@ describe("decompose", () => {
     expect(params.system).not.toContain("compound question?");
     // Spec §6: hard budget, no retries — fall back instead of retrying.
     expect(options).toMatchObject({ timeout: DECOMPOSE_TIMEOUT_MS, maxRetries: 0 });
+    // Regression guard: a dropped output_config would still pass mocked
+    // happy-path assertions above, since the mock returns valid JSON either way.
+    expect(params.output_config).toMatchObject({
+      format: {
+        type: "json_schema",
+        schema: { required: ["sub_questions"] },
+      },
+    });
   });
 
   it("returns null on a refusal stop reason", async () => {

@@ -130,7 +130,9 @@ export async function POST(req: NextRequest): Promise<Response> {
   }
 
   // Relevance gate (spec §6.4): off-topic and nonsense input never reaches
-  // Claude. Chunks are still returned so the glass box can show why it gated.
+  // the answering model. (It may still trigger a decompose() call before
+  // this gate runs — that call is bounded and cheap; see spec §7.) Chunks
+  // are still returned so the glass box can show why it gated.
   if (!isRelevant(retrieval)) {
     return NextResponse.json({
       kind: "gated",

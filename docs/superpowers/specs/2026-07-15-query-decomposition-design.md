@@ -37,7 +37,7 @@ decides *how*, not *whether*.
    original "same latency, unconditionally" framing didn't hold under the
    reference implementation, AND that decompose's real-world latency floor
    (~1s+ for a live Haiku call) means the honest common-case added latency is
-   **~0.5–1.5s over baseline, capped around 2s** — not "≈0". §7 has the full
+   **~0.5–1.5s over baseline, capped at 2.5s (measured max 2.18s)** — not "≈0". §7 has the full
    numbers and reasoning.
 3. The improvement is a reproducible number: an opt-in eval mode runs the
    decomposed path against the compound tier.
@@ -209,7 +209,7 @@ retrying.
   (n=9) and found decompose's real latency floor is much higher than assumed
   — live Haiku calls with structured JSON output routinely take **~1–3
   seconds**, not sub-second. The honest common-case added latency for a
-  *simple* question is **~0.5–1.5s over baseline, capped around 2s** — not
+  *simple* question is **~0.5–1.5s over baseline, capped at 2.5s (measured max 2.18s)** — not
   "≈0". (One mitigating factor: the 1–3s figures were measured on
   *compound*-tier questions, whose decompose output is 2–4 full sub-questions
   — a simple question's output is much shorter, just the question echoed
@@ -222,7 +222,9 @@ retrying.
   extra before streaming starts (unchanged).
 - **Spend:** one Haiku call per question (cent-fractions), bounded by the
   existing 20/day visitor cap and global ceiling; the rate-count precedes the
-  decompose call, so gated/rate-limited questions never reach Haiku. No new
+  decompose call, so rate-limited questions never reach Haiku at all
+  (relevance-gated questions may still trigger one decompose() call, but
+  never reach the answering model). No new
   guardrail work. Note: an abandoned (soft-deadline-missed) decompose call
   still completes and still costs the same Haiku call — the soft deadline
   changes what the route waits for, not what gets spent.
@@ -237,7 +239,7 @@ retrying.
   Haiku's response time that request. Accepted: it trades a rare, bounded
   quality loss (one compound question, one request, gets simple-path
   retrieval) for capping every request's worst-case latency, rather than
-  exposing every request to up to 3s of added wait for the sake of catching
+  exposing every request to up to 4s of added wait for the sake of catching
   the rare slow-decompose case. §10.4 defines the measurement that quantifies
   how often this actually happens, and its statistical power.
 
