@@ -2,15 +2,34 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import type { AnswerEvent } from "../lib/answer";
 import { createSessionToken, SESSION_COOKIE, VISITOR_COOKIE } from "../lib/session";
+import { DECOMPOSE_SOFT_DEADLINE_MS } from "../lib/decompose";
 
 // Mock every server dependency before importing the route.
 const searchChunks = vi.fn();
+const searchChunksBatch = vi.fn();
+const decompose = vi.fn();
+const verifySessionToken = vi.fn();
 const recordQuestion = vi.fn();
 const streamAnswer = vi.fn();
 vi.mock("../lib/retrieval", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   searchChunks: (...args: unknown[]) => searchChunks(...args),
+  searchChunksBatch: (...args: unknown[]) => searchChunksBatch(...args),
 }));
+vi.mock("../lib/decompose", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/decompose")>();
+  return {
+    ...actual,
+    decompose: (...args: unknown[]) => decompose(...args),
+  };
+});
+vi.mock("../lib/session", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/session")>();
+  return {
+    ...actual,
+    verifySessionToken: (...args: unknown[]) => verifySessionToken(...args),
+  };
+});
 vi.mock("../lib/rate-limit", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   recordQuestion: (...args: unknown[]) => recordQuestion(...args),
@@ -45,13 +64,30 @@ async function post(body: unknown, withSession = true) {
   return POST(req);
 }
 
-beforeEach(() => {
+// Builds the request (including the real, cryptographically-signed session
+// cookie) eagerly, so it can be constructed BEFORE fake timers are enabled
+// in the soft-deadline tests below.
+async function buildRequest(body: unknown) {
+  const req = new NextRequest("http://localhost/api/ask", {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: { "content-type": "application/json" },
+  });
+  req.cookies.set(SESSION_COOKIE, await createSessionToken(SECRET));
+  req.cookies.set(VISITOR_COOKIE, "vis-1");
+  return req;
+}
+
+beforeEach(async () => {
   vi.stubEnv("SESSION_SECRET", SECRET);
   recordQuestion.mockResolvedValue({ visitorCount: 1, globalCount: 1 });
   searchChunks.mockResolvedValue({
     chunks: [chunkRow],
     maxSimilarity: chunkRow.similarity,
   });
+  decompose.mockResolvedValue(null);
+  const actualSession = await vi.importActual<typeof import("../lib/session")>("../lib/session");
+  verifySessionToken.mockImplementation(actualSession.verifySessionToken);
   async function* fake(): AsyncGenerator<AnswerEvent> {
     yield { type: "text", delta: "Answer." };
     yield { type: "done", citedDocumentIndexes: [0], stopReason: "end_turn" };
@@ -187,5 +223,144 @@ describe("POST /api/ask", () => {
     expect(generatorFinallyRan).toBe(true);
     expect(errorSpy).not.toHaveBeenCalled();
     errorSpy.mockRestore();
+  });
+
+  const chunkRow2 = { ...chunkRow, id: 2, breadcrumb: "Law 10 › 2. Winning team" };
+
+  it("keeps the simple path when decompose returns one sub-question or null", async () => {
+    decompose.mockResolvedValue(["when is a player offside?"]);
+    const res = await post({ question: "when is a player offside?" });
+    expect(res.status).toBe(200);
+    expect(searchChunksBatch).not.toHaveBeenCalled();
+  });
+
+  it("merges sub-question retrievals and answers with the ORIGINAL question", async () => {
+    decompose.mockResolvedValue(["what abandons a match?", "is there a shoot-out?"]);
+    searchChunksBatch.mockResolvedValue([
+      { chunks: [chunkRow2], maxSimilarity: chunkRow2.similarity },
+    ]);
+    const res = await post({ question: "what happens if everyone is sent off?" });
+    const body = await res.text();
+    expect(searchChunksBatch).toHaveBeenCalledWith(
+      ["what abandons a match?", "is there a shoot-out?"],
+      8,
+    );
+    // meta carries the merged set (both chunk ids)
+    expect(body).toContain('"id":1');
+    expect(body).toContain('"id":2');
+    // spec §3: the answering model sees the visitor's original question only
+    expect(streamAnswer).toHaveBeenCalledWith(
+      "what happens if everyone is sent off?",
+      expect.arrayContaining([
+        expect.objectContaining({ id: 1 }),
+        expect.objectContaining({ id: 2 }),
+      ]),
+    );
+  });
+
+  it("falls back to the baseline result when sub-question retrieval throws", async () => {
+    decompose.mockResolvedValue(["a?", "b?"]);
+    searchChunksBatch.mockRejectedValue(new Error("Voyage API 429"));
+    const res = await post({ question: "compound?" });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("event: text"); // still streams from baseline chunks
+    expect(streamAnswer).toHaveBeenCalledWith("compound?", [chunkRow]);
+  });
+
+  it("gates on the MERGED max similarity", async () => {
+    // Baseline is sub-threshold; a sub-question result clears it — merged
+    // max decides (spec §5), so this streams instead of gating.
+    searchChunks.mockResolvedValue({
+      chunks: [{ ...chunkRow, similarity: RELEVANCE_THRESHOLD - 0.05 }],
+      maxSimilarity: RELEVANCE_THRESHOLD - 0.05,
+    });
+    decompose.mockResolvedValue(["a?", "b?"]);
+    searchChunksBatch.mockResolvedValue([
+      { chunks: [chunkRow2], maxSimilarity: RELEVANCE_THRESHOLD + 0.1 },
+    ]);
+    const res = await post({ question: "compound?" });
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+  });
+
+  it("never calls decompose for rate-limited questions (paid call after count)", async () => {
+    recordQuestion.mockResolvedValue({ visitorCount: 21, globalCount: 50 });
+    await post({ question: "offside?" });
+    expect(decompose).not.toHaveBeenCalled();
+  });
+
+  it("treats a slow decompose as simple once the soft deadline elapses (spec §3, §6)", async () => {
+    // Build the request (real WebCrypto session-token signing) BEFORE
+    // enabling fake timers, and mock verifySessionToken (also real
+    // WebCrypto — see route.ts's first line) so nothing in this test needs
+    // a genuine event-loop turn to resolve once fake timers are active.
+    // Fable's design review on PR #50 found this by actually running the
+    // test: WebCrypto's async work doesn't advance with vi's fake timers,
+    // so a single vi.advanceTimersByTimeAsync() call would sweep before the
+    // route ever reached the point of registering the soft-deadline timer,
+    // making the test hang/timeout every run.
+    const req = await buildRequest({ question: "compound?" });
+    verifySessionToken.mockResolvedValue(true);
+    vi.useFakeTimers();
+    try {
+      let resolveDecompose: (v: string[] | null) => void = () => {};
+      decompose.mockImplementation(
+        () =>
+          new Promise<string[] | null>((resolve) => {
+            resolveDecompose = resolve;
+          }),
+      );
+      const resPromise = POST(req);
+      await vi.advanceTimersByTimeAsync(DECOMPOSE_SOFT_DEADLINE_MS + 50);
+      const res = await resPromise;
+      expect(res.status).toBe(200);
+      expect(searchChunksBatch).not.toHaveBeenCalled();
+
+      // The late answer arrives after the response was already produced —
+      // it must have no further effect (spec §6, "answers after the soft
+      // deadline" row).
+      resolveDecompose(["a?", "b?"]);
+      await vi.runAllTimersAsync();
+      expect(searchChunksBatch).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses a decompose answer that already resolved while baseline retrieval was the slow one (spec §3 elapsed-aware deadline)", async () => {
+    // If baseline alone already used up the whole soft-deadline budget, an
+    // ALREADY-RESOLVED decompose answer must still be used — not discarded
+    // by a fixed wall-clock cutoff measured from request start. This is the
+    // property Fable's design review specifically asked to be tested.
+    // Same buildRequest + verifySessionToken mock as the test above, for
+    // the same WebCrypto-vs-fake-timers reason.
+    const req = await buildRequest({ question: "what happens if everyone is sent off?" });
+    verifySessionToken.mockResolvedValue(true);
+    vi.useFakeTimers();
+    try {
+      decompose.mockResolvedValue(["what abandons a match?", "is there a shoot-out?"]);
+      searchChunksBatch.mockResolvedValue([
+        { chunks: [chunkRow2], maxSimilarity: chunkRow2.similarity },
+      ]);
+      searchChunks.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            setTimeout(
+              () => resolve({ chunks: [chunkRow], maxSimilarity: chunkRow.similarity }),
+              DECOMPOSE_SOFT_DEADLINE_MS + 100,
+            );
+          }),
+      );
+      const resPromise = POST(req);
+      await vi.advanceTimersByTimeAsync(DECOMPOSE_SOFT_DEADLINE_MS + 150);
+      const res = await resPromise;
+      expect(res.status).toBe(200);
+      expect(searchChunksBatch).toHaveBeenCalledWith(
+        ["what abandons a match?", "is there a shoot-out?"],
+        8,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
