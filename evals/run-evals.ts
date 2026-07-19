@@ -1,5 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { searchChunks } from "../lib/retrieval";
+import { decompose } from "../lib/decompose";
+import { mergeResults, MERGED_CHUNK_CAP, searchChunksBatch } from "../lib/retrieval";
 
 interface Golden {
   question: string;
@@ -52,10 +54,10 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Voyage's free tier (no payment method on file) is rate-limited to 3 requests/minute.
 // Retry with backoff on 429s so the eval run survives the free-tier limit end to end.
-async function searchWithRetry(question: string, k: number, maxAttempts = 6) {
+async function withVoyageRetry<T>(fn: () => Promise<T>, maxAttempts = 6): Promise<T> {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      return await searchChunks(question, k);
+      return await fn();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (!message.includes("429") || attempt === maxAttempts) throw err;
@@ -68,6 +70,9 @@ async function searchWithRetry(question: string, k: number, maxAttempts = 6) {
   }
   throw new Error("unreachable");
 }
+
+const searchWithRetry = (question: string, k: number) =>
+  withVoyageRetry(() => searchChunks(question, k));
 
 interface AbstainQuestion {
   question: string;
@@ -133,7 +138,66 @@ async function runCompoundSet(compounds: CompoundQuestion[]): Promise<void> {
   }
 }
 
+// Opt-in (--decompose): runs the compound tier through the production
+// decompose → multi-retrieve → merge path. Paid (~9 Haiku calls, ~a cent)
+// and mildly nondeterministic (an LLM chooses the split) — which is why it
+// is not part of the default, free, deterministic run.
+async function runCompoundSetDecomposed(compounds: CompoundQuestion[]): Promise<void> {
+  const K = 8;
+  let baseFull = 0;
+  let decFull = 0;
+  let baseSum = 0;
+  let decSum = 0;
+  for (const c of compounds) {
+    const baseline = await searchWithRetry(c.question, K);
+    const subs = await decompose(c.question);
+    let merged = baseline;
+    let subCount = 1;
+    if (subs && subs.length >= 2) {
+      subCount = subs.length;
+      const subResults = await withVoyageRetry(() => searchChunksBatch(subs, K));
+      if (subResults.length > 0) merged = mergeResults([baseline, ...subResults]);
+    }
+    const base = coverageScore(baseline.chunks, c.required);
+    const dec = coverageScore(merged.chunks, c.required);
+    baseSum += base.coverage;
+    decSum += dec.coverage;
+    if (base.missed.length === 0) baseFull += 1;
+    if (dec.missed.length === 0) decFull += 1;
+    console.log(
+      `base ${c.required.length - base.missed.length}/${c.required.length}` +
+        ` → decomposed ${c.required.length - dec.missed.length}/${c.required.length}` +
+        `  (${subCount} sub-question${subCount === 1 ? "" : "s"})  ${c.question}`,
+    );
+    if (subs && subs.length >= 2) console.log(`  subs: ${subs.join(" | ")}`);
+    if (dec.missed.length > 0) console.log(`  still missed: ${dec.missed.join(" | ")}`);
+  }
+  console.log(
+    `\n[compound --decompose] n=${compounds.length}, k=${K}/query, merged cap ${MERGED_CHUNK_CAP}:`,
+  );
+  console.log(
+    `  full coverage: baseline ${baseFull}/${compounds.length}` +
+      ` → decomposed ${decFull}/${compounds.length}`,
+  );
+  console.log(
+    `  mean coverage: baseline ${(baseSum / compounds.length).toFixed(2)}` +
+      ` → decomposed ${(decSum / compounds.length).toFixed(2)}`,
+  );
+}
+
 async function main() {
+  if (process.argv.includes("--decompose")) {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      throw new Error("--decompose requires ANTHROPIC_API_KEY (decomposition is a Claude call)");
+    }
+    const compounds: CompoundQuestion[] = JSON.parse(
+      await readFile("evals/compound-questions.json", "utf8"),
+    );
+    console.log("=== Compound set, decomposed retrieval (opt-in; paid; nondeterministic) ===");
+    await runCompoundSetDecomposed(compounds);
+    return;
+  }
+
   const goldens: Golden[] = JSON.parse(await readFile("evals/golden-questions.json", "utf8"));
   const paraphrases: Golden[] = JSON.parse(
     await readFile("evals/paraphrase-questions.json", "utf8"),
