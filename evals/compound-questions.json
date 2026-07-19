@@ -43,5 +43,30 @@
     "question": "Can a team make an extra substitution in extra time of a cup match, and what is the procedure for making it?",
     "required": ["Law 3 › 2", "Law 3 › 3"],
     "note": "Additional-substitution allowance plus the substitution procedure itself."
+  },
+  {
+    "question": "If a referee blows the whistle for a foul at almost the exact same instant the ball is crossing the goal line, does the goal count because the ball technically crossed the line, or does the whistle stopping play take priority no matter how close the timing is?",
+    "required": ["Law 9 › 1", "Law 10 › 1"],
+    "note": "Ball out-of-play triggers the instant the referee stops play, independent of whether it has already crossed the line — retrieval must connect the general out-of-play timing rule with the goal-scored definition, not just find one or the other. Harvested from a real disputed 2026-07-19 incident (see issue #64/#65 comments)."
+  },
+  {
+    "question": "Can a referee cancel a free kick they've just awarded, based only on their assistant referee telling them there was no foul — with no VAR involved at all — and how late in the process can that correction still happen?",
+    "required": ["Law 5 › 3", "Law 6 › Introduction"],
+    "note": "The referee's authority to change a decision based on another match official's advice (Law 5) has to be connected with what assistant referees are actually there to do (Law 6) — a non-VAR mechanism this app's corpus doesn't otherwise call attention to. Harvested from a real disputed 2026-07-19 incident (see issue #64/#65 comments)."
+  },
+  {
+    "question": "If a team's players walk off the pitch in protest and refuse to continue for several minutes, what do the Laws of the Game say should happen — do players need the referee's permission to leave the field, can the referee just resume once they return, and does that lost time get added on separately?",
+    "required": ["Law 3 › 8", "Law 7 › 3", "Law 7 › 5"],
+    "note": "Combines the re-entry-without-permission procedure, the time-lost allowance that covers disciplinary stoppages and time-wasting, and the abandoned-match rule — three separate sections for one 'what happens' question. Harvested from a real disputed 2026-07-19 incident (see issue #64/#65 comments)."
+  },
+  {
+    "question": "Does the 'you can't touch the ball twice in a row' rule apply the same way to a penalty kick as it does to a regular free kick or goal kick — and if a kicker slips and accidentally double-touches the ball taking a penalty, is the outcome the same as for any other restart?",
+    "required": ["Law 13 › 3", "Law 14 › 2"],
+    "note": "The general second-touch restriction (Law 13) applies to penalty kicks too (Law 14) but is stated separately in each place — retrieval has to find both, not assume the free-kick rule alone answers a penalty-kick question. Harvested from a real disputed 2026-07-19 incident (see issue #64/#65 comments)."
+  },
+  {
+    "question": "If, in the same passage of play inside the penalty area, an attacker's arm touches the ball in what looks like a handball, and then a defender immediately fouls that same attacker, which offense governs the restart — a penalty for the foul, or a free kick the other way for the handball?",
+    "required": ["Law 5 › 3", "Law 12 › 1"],
+    "note": "Tests whether retrieval surfaces the simultaneous-offense precedence rule (Law 5) alongside the handball offense definition itself (Law 12) — a real professional refereeing dispute about which infringement 'wins' when two happen in the same passage of play. Harvested from a real disputed 2026-07-19 incident (see issue #64/#65 comments)."
   }
 ]
