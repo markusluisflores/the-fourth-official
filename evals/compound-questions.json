@@ -51,13 +51,13 @@
   },
   {
     "question": "Can a referee cancel a free kick they've just awarded, based only on their assistant referee telling them there was no foul — with no VAR involved at all — and how late in the process can that correction still happen?",
-    "required": ["Law 5 › 3", "Law 6 › Introduction"],
+    "required": ["Law 5 › 2", "Law 6 › Introduction"],
     "note": "The referee's authority to change a decision based on another match official's advice (Law 5) has to be connected with what assistant referees are actually there to do (Law 6) — a non-VAR mechanism this app's corpus doesn't otherwise call attention to. Harvested from a real disputed 2026-07-19 incident (see issue #64/#65 comments)."
   },
   {
     "question": "If a team's players walk off the pitch in protest and refuse to continue for several minutes, what do the Laws of the Game say should happen — do players need the referee's permission to leave the field, can the referee just resume once they return, and does that lost time get added on separately?",
-    "required": ["Law 3 › 8", "Law 7 › 3", "Law 7 › 5"],
-    "note": "Combines the re-entry-without-permission procedure, the time-lost allowance that covers disciplinary stoppages and time-wasting, and the abandoned-match rule — three separate sections for one 'what happens' question. Harvested from a real disputed 2026-07-19 incident (see issue #64/#65 comments)."
+    "required": ["Law 3 › 8", "Law 7 › 3", "Law 7 › 5", "Law 12 › 4"],
+    "note": "Combines the leaving-the-field-without-permission caution (Law 12), the re-entry-without-permission procedure (Law 3), the time-lost allowance that covers disciplinary stoppages and time-wasting (Law 7), and the abandoned-match rule (Law 7) — four separate sections for one 'what happens' question. Harvested from a real disputed 2026-07-19 incident (see issue #64/#65 comments)."
   },
   {
     "question": "Does the 'you can't touch the ball twice in a row' rule apply the same way to a penalty kick as it does to a regular free kick or goal kick — and if a kicker slips and accidentally double-touches the ball taking a penalty, is the outcome the same as for any other restart?",
