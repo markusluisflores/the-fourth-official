@@ -28,5 +28,7 @@
   { "question": "What happens if the goalkeeper encroaches during a penalty kick and the ball misses the goal?", "expected": ["Law 14 › 2"] },
   { "question": "What is awarded if the goal kick taker touches the ball a second time before another player does?", "expected": ["Law 16 › 2"] },
   { "question": "Does the ball need to leave the corner arc before a corner kick is considered in play?", "expected": ["Law 17 › 1"] },
-  { "question": "Who is responsible for controlling the required distance between players and the ball at restarts?", "expected": ["Law 6 › 1"] }
+  { "question": "Who is responsible for controlling the required distance between players and the ball at restarts?", "expected": ["Law 6 › 1"] },
+  { "question": "A player who's already on a yellow card dives to win a free kick — does that automatically mean a second yellow and being sent off?", "expected": ["Law 12 › 4"] },
+  { "question": "If a foul earns a penalty kick, does that let the referee give only a yellow card instead of a straight red for denying a goalscoring opportunity?", "expected": ["Law 12 › 4"] }
 ]
