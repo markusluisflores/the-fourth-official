@@ -96,12 +96,13 @@ git commit -m "feat: add nullable embedding_text column to chunks"
 - Test: `tests/chunk.test.ts`
 
 **Interfaces:**
-- Consumes: nothing new — `RawChunk` and `chunkRulebook` already exist
-  (`scripts/ingest/chunk.ts:3-7,37-50`).
-- Produces: `RawChunk.embeddingText?: string`, and `chunkRulebook`'s output
-  now sets it for the one matching chunk. `applyEmbeddingTextOverrides`
-  (new exported pure function) — consumed by Task 3 indirectly via
-  `chunkRulebook`, and directly testable on its own.
+- Consumes: nothing new — `RawChunk` already exists
+  (`scripts/ingest/chunk.ts:3-7`). `chunkRulebook` is unmodified by this
+  task and does not call the new function (see Step 3).
+- Produces: `RawChunk.embeddingText?: string`, and a new exported pure
+  function `applyEmbeddingTextOverrides(chunks, overrides?)` — called
+  directly by Task 3 (`index.ts`'s `main()`, after `chunkRulebook`'s output
+  is already produced), not from inside `chunkRulebook`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -266,9 +267,11 @@ export const EMBEDDING_TEXT_OVERRIDES: Record<string, string> = {
 // Applies EMBEDDING_TEXT_OVERRIDES to a chunk list, setting embeddingText on the one
 // matching chunk per breadcrumb key. Called from index.ts's main() after
 // chunkRulebook() produces the full corpus — NOT called from inside chunkRulebook
-// itself, so this has no effect on chunkRulebook's own unit tests (their small fixture
-// texts never contain the "Law 3 › 1. Number of players" breadcrumb, and this function
-// is never invoked by them). Fails loudly (never silently) on a breadcrumb that matches
+// itself, so chunkRulebook's own unit tests are unaffected: this function is never
+// invoked by chunkRulebook or by chunkRulebook's tests (one of those tests does use the
+// real "Law 3 › 1. Number of players" breadcrumb in its fixture, but that's irrelevant
+// here — this function simply never runs during that test). Fails loudly (never
+// silently) on a breadcrumb that matches
 // zero or more than one chunk (breadcrumbs are not guaranteed unique — see
 // splitOversize, which already produces multiple chunks sharing one breadcrumb for
 // oversized sections), and on an override value that doesn't start with the chunk's
@@ -303,8 +306,7 @@ Run: `npx vitest run tests/chunk.test.ts`
 Expected: PASS, all tests including the pre-existing ones (`chunkRulebook`
 and `assertCompleteLawSet` are completely unchanged by this task, so every
 existing test for them keeps passing exactly as before; the new
-`applyEmbeddingTextOverrides` tests are additive)
-for all of them).
+`applyEmbeddingTextOverrides` tests are additive).
 
 - [ ] **Step 5: Type-check**
 
