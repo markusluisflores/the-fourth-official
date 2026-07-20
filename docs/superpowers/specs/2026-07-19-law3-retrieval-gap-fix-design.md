@@ -163,7 +163,14 @@ Three edits, all in existing files:
    across the corpus (e.g. `Law 3 › 2` already spans two rows today, from
    `splitOversize`), so a silent zero-match or multi-match would be a bug
    worth failing loudly on, the same defensive posture as
-   `assertCompleteLawSet`'s existing loud-failure pattern in this file.
+   `assertCompleteLawSet`'s existing loud-failure pattern in this file. The
+   override map's value must also be asserted to start with the matched
+   chunk's actual `content` (`embeddingText.startsWith(content)`) before
+   ingest proceeds — this turns two otherwise-silent failure modes into loud
+   ones: a hand-copy slip when the override text was written (typo drift
+   from the real rulebook text), and future corpus drift if the source PDF
+   is ever replaced with a newer Laws of the Game edition and the parsed
+   text no longer matches what's hard-coded in the override map.
 2. **`scripts/ingest/index.ts`, embedding step** — changes from
    `batch.map((c) => c.content)` to `batch.map((c) => c.embeddingText ??
    c.content)`. For every chunk except Law 3 § 1, `embeddingText` is
@@ -193,11 +200,15 @@ of this fix. Vector similarity alone is what §4.2's bridging text targets.
    would trivially score high in isolation, a false pass) using the same
    `"document"` input type production ingest uses, and compare it against
    the red-card question embedded with the same `"query"` input type
-   `searchChunks` uses. Confirm it would actually place in the top-8
-   (today's 8th-place similarity score is 0.389 — the override text needs
-   to beat that). This is a single Voyage call, not a re-ingest, so it's
-   cheap to check before spending the ~hour-long rate-limited full rebuild
-   on a sentence that might not move the needle enough.
+   `searchChunks` uses. Confirm it would actually place in the top-8 with a
+   real margin, not just a hair above today's 8th-place similarity score of
+   0.389 — cosine similarity has third-decimal-place variance from run to
+   run (observed directly during review), and every chunk gets re-embedded
+   on a full re-ingest, so a razor-thin win here isn't a reliable predictor
+   of a razor-thin win after the real rebuild. This is two Voyage calls (one
+   `"document"`-type, one `"query"`-type — differing input types, not a
+   single shared call), not a re-ingest, so it's cheap to check before
+   spending time on a sentence that might not move the needle enough.
 2. **Full re-ingest** — re-run the existing `npm run ingest` command, the
    same delete-and-reinsert-by-`corpus_version` process already in place
    (see `index.ts`'s existing comments on why this is safe as a
@@ -256,11 +267,13 @@ of this fix. Vector similarity alone is what §4.2's bridging text targets.
 
 1. Migration: `alter table chunks add column embedding_text text`.
 2. `chunk.ts`: `embeddingText?` field on `RawChunk` + one-entry override map,
-   asserting exactly one breadcrumb match.
+   asserting exactly one breadcrumb match and that the override value
+   starts with the matched chunk's real `content`.
 3. `index.ts`: embedding step prefers `embeddingText ?? content`; row-insert
    step writes `embedding_text: c.embeddingText ?? null`.
-4. Dry-run validation: one throwaway embedding call confirming the bridging
-   text's fingerprint beats the current 8th-place similarity (0.389) before
+4. Dry-run validation: two throwaway embedding calls (document-type override
+   text, query-type question) confirming a real margin over the current
+   8th-place similarity (0.389), not just a hair above it, before
    committing to the full re-ingest.
 5. `npm run ingest` re-run against the live corpus.
 6. `evals/compound-questions.json`: first entry's `note` field updated.
@@ -274,3 +287,4 @@ of this fix. Vector similarity alone is what §4.2's bridging text targets.
 | 2026-07-19 | Initial spec — approved in-session after two rounds of live reproduction/systemic-check testing against the corpus. |
 | 2026-07-19 | Fable review (PR #69): fixed a real inconsistency between §4.2 (claimed the new column was "inert until ingest reads it") and §4.3 (the described mechanism never actually read or wrote that column) — `index.ts`'s row-insert step now explicitly writes `embedding_text`, making it a real provenance record instead of a column that would've stayed `null` forever. Folded in three non-blocking suggestions: a pre-re-ingest dry-run validation step, an explicit note that the keyword/full-text lane is deliberately left untouched (verified it matches zero chunks for this question anyway), and an exactly-one-match assertion on the override map (breadcrumbs aren't unique across the corpus). Everything else — root cause, the Round 1/Round 2 control-question results, the pipeline mechanism fitting the real code, and the bridging sentence's football accuracy — independently verified clean. |
 | 2026-07-19 | Fable follow-up review of the fix: **confirmed resolved, no remaining blockers.** One further SUGGESTION folded in — the dry-run step's wording now names the full override string explicitly (not just "the bridging text," which read literally could mean the appended sentence alone, a false-pass risk since it's packed with red-card vocabulary) and specifies matching production's `"document"`/`"query"` Voyage input types. Two cosmetic NITs fixed: §4.2 no longer claims the column is read (nothing reads it programmatically, it's a provenance record only), and §4.3 no longer references a nonexistent trigram configuration. |
+| 2026-07-19 | **Independent fresh-dispatch review** (no prior context, told not to defer to earlier comments): independently re-reproduced the retrieval failure live and re-verified every load-bearing claim from scratch (root cause, corpus structure, mechanism fit, citation-integrity barriers, bridging-sentence accuracy) — all held up. Found **no BLOCKERs**, but caught 4 items neither the initial nor the resumed review round had: the dry-run's "beat 0.389" threshold lacked a safety margin (cosine similarity showed measurable run-to-run decimal variance during the reviewer's own re-check) — now requires a real margin, not a bare win; the override map should assert its text starts with the chunk's real `content`, catching hand-copy slips or future-edition drift as loud ingest failures; "single Voyage call" corrected to two (differing input types); "~hour-long full rebuild" corrected — the actual re-ingest is ~2-3 minutes at `EMBED_BATCH_SIZE=20`, that estimate was for the separately-rejected full-corpus-sweep option, not this rollout step. All four folded in. This is the first PR in this project run under the new interim "do both resumed-confirmation and fresh-dispatch on every round" practice (see `FABLE-HANDOFF.md`) — the fresh round demonstrably surfaced real findings the resumed round missed, a data point for that still-open policy question. |
