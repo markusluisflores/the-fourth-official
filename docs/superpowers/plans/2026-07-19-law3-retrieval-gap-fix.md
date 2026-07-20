@@ -36,6 +36,10 @@ provenance record. `content` — what's shown in citations — is never touched.
   (approved, merged, two rounds of Fable review — do not deviate from its
   approach without a plan revision on its own docs branch, per this
   project's spec/plan-revision rule).
+- All shell commands in this plan (including the throwaway-script commands
+  in Tasks 4 and 5) are POSIX `sh` syntax — run them via a Bash-style tool,
+  not PowerShell, on this Windows machine (same as every other command
+  already run during this fix's brainstorming).
 
 ---
 
@@ -155,6 +159,31 @@ describe("applyEmbeddingTextOverrides", () => {
       }),
     ).toThrow(/does not start with the chunk's real content/);
   });
+
+  // Exercises the default-argument path (no second argument passed — relies on the
+  // exported EMBEDDING_TEXT_OVERRIDES constant), using the real Law 3 § 1 content so this
+  // also proves the default map's own hard-coded value is self-consistent with itself
+  // (i.e. its startsWith assertion actually passes against real rulebook text).
+  it("uses EMBEDDING_TEXT_OVERRIDES by default when no override map is passed", () => {
+    const realLaw3s1Content =
+      "A match is played by two teams, each with a maximum of eleven players;\n" +
+      "one must be the goalkeeper. A match may not start or continue if either team\n" +
+      "has fewer than seven players.\n" +
+      "If a team has fewer than seven players because one or more players has\n" +
+      "deliberately left the field of play, the referee is not obliged to stop play and\n" +
+      "the advantage may be played, but the match must not resume after the ball has\n" +
+      "gone out of play if a team does not have the minimum number of seven players.\n" +
+      "If the competition rules state that all players and substitutes must be named\n" +
+      "before kick-off and a team starts a match with fewer than eleven players,\n" +
+      "only the players and substitutes named on the team list may take part in the\n" +
+      "match upon their arrival.";
+    const chunks: RawChunk[] = [
+      { lawNumber: 3, breadcrumb: "Law 3 › 1. Number of players", content: realLaw3s1Content },
+    ];
+    const result = applyEmbeddingTextOverrides(chunks); // no second argument
+    expect(result[0].embeddingText).toContain("red card");
+    expect(result[0].embeddingText).toContain(realLaw3s1Content);
+  });
 });
 ```
 
@@ -179,31 +208,34 @@ exist yet).
 
 - [ ] **Step 3: Implement**
 
-In `scripts/ingest/chunk.ts`, change the `RawChunk` interface and add the
-new function + override map. Full replacement of the top of the file
-through `chunkRulebook`:
+**Important:** `applyEmbeddingTextOverrides` is a standalone function, called
+from `index.ts`'s `main()` (Task 3) — exactly where `assertCompleteLawSet`
+is already called, and for the same reason: it's a step that runs *after*
+`chunkRulebook` produces the corpus's chunk list, not something
+`chunkRulebook` calls internally. `chunkRulebook` itself is **not modified
+at all** in this task — do not touch it, and do not remove
+`assertCompleteLawSet`, which stays exactly as it is.
+
+Two targeted edits to `scripts/ingest/chunk.ts`:
+
+**Edit 1 — add the new field to `RawChunk`** (currently 5 lines near the
+top of the file):
 
 ```ts
-import { isLawDivider } from "./parse";
-
 export interface RawChunk {
   lawNumber: number;
   breadcrumb: string;
   content: string;
   embeddingText?: string;
 }
+```
 
-export const MAX_CHUNK_CHARS = 1500;
+**Edit 2 — append this new code to the end of the file** (after the
+existing `packUnits` function, which is currently the last thing in the
+file — do not insert it earlier, and do not remove or reorder anything
+already in the file):
 
-// Chapter dividers in the live PDF (extracted via unpdf) render as "Law" and the bare
-// chapter number on their own consecutive lines — the spelled-out title is a stylized
-// graphic and isn't extractable as plain text, unlike the synthetic "LAW 11 OFFSIDE"
-// single-line fixture this regex originally targeted. See parse.ts's isLawDivider for
-// the shared divider-detection predicate, also used by truncateBackMatter's boundary
-// logic.
-const SECTION_HEADING = /^(\d{1,2})\.\s+(\S.*)$/;
-
-export const EXPECTED_LAW_NUMBERS = Array.from({ length: 17 }, (_, i) => i + 1);
+```ts
 
 // Breadcrumb-keyed overrides: enriched text fed to the embedding step instead of the
 // chunk's real content, so its search fingerprint can be nudged closer to phrasings the
@@ -232,8 +264,12 @@ export const EMBEDDING_TEXT_OVERRIDES: Record<string, string> = {
 };
 
 // Applies EMBEDDING_TEXT_OVERRIDES to a chunk list, setting embeddingText on the one
-// matching chunk per breadcrumb key. Fails loudly (never silently) on a breadcrumb that
-// matches zero or more than one chunk (breadcrumbs are not guaranteed unique — see
+// matching chunk per breadcrumb key. Called from index.ts's main() after
+// chunkRulebook() produces the full corpus — NOT called from inside chunkRulebook
+// itself, so this has no effect on chunkRulebook's own unit tests (their small fixture
+// texts never contain the "Law 3 › 1. Number of players" breadcrumb, and this function
+// is never invoked by them). Fails loudly (never silently) on a breadcrumb that matches
+// zero or more than one chunk (breadcrumbs are not guaranteed unique — see
 // splitOversize, which already produces multiple chunks sharing one breadcrumb for
 // oversized sections), and on an override value that doesn't start with the chunk's
 // real content (guards against a hand-copy slip when the override was written, or
@@ -261,36 +297,13 @@ export function applyEmbeddingTextOverrides(
 }
 ```
 
-Then update `chunkRulebook` to apply the overrides before returning (last
-line of the function):
-
-```ts
-export function chunkRulebook(text: string): RawChunk[] {
-  const chunks: RawChunk[] = [];
-  const lawParts = splitByLaw(text);
-
-  for (const { lawNumber, body } of lawParts) {
-    for (const section of splitBySection(body)) {
-      const crumb = `Law ${lawNumber} › ${section.title}`;
-      for (const piece of splitOversize(section.body)) {
-        chunks.push({ lawNumber, breadcrumb: crumb, content: piece });
-      }
-    }
-  }
-  return applyEmbeddingTextOverrides(chunks);
-}
-```
-
-(Everything below `chunkRulebook` in the file — `splitByLaw`,
-`splitBySection`, `splitOversize`, `packUnits` — is unchanged.)
-
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run tests/chunk.test.ts`
-Expected: PASS, all tests including the pre-existing ones (the override
-application at the end of `chunkRulebook` must not break any existing
-`chunkRulebook`/`assertCompleteLawSet` test — none of their fixtures use the
-`Law 3 › 1. Number of players` breadcrumb, so the override map is a no-op
+Expected: PASS, all tests including the pre-existing ones (`chunkRulebook`
+and `assertCompleteLawSet` are completely unchanged by this task, so every
+existing test for them keeps passing exactly as before; the new
+`applyEmbeddingTextOverrides` tests are additive)
 for all of them).
 
 - [ ] **Step 5: Type-check**
@@ -313,7 +326,8 @@ git commit -m "feat: add embedding-text override for Law 3 § 1 (issue #64)"
 - Modify: `scripts/ingest/index.ts`
 
 **Interfaces:**
-- Consumes: `RawChunk.embeddingText?: string` (Task 2).
+- Consumes: `RawChunk.embeddingText?: string` and `applyEmbeddingTextOverrides`
+  (Task 2, both exported from `scripts/ingest/chunk.ts`).
 - Produces: `chunks.embedding_text` populated on ingest (Task 1's column).
 
 This script is not unit-tested today (no `index.test.ts` exists — it's an
@@ -322,32 +336,53 @@ running it, same as every prior ingest change in this project). This task's
 own verification is the dry-run in Task 4 and the full re-ingest in Task 5,
 not a Vitest run.
 
-- [ ] **Step 1: Modify the embedding step**
+- [ ] **Step 1: Add the import and call `applyEmbeddingTextOverrides` after chunking**
 
-In `scripts/ingest/index.ts`, change the embedding-step `batch.map` call
-(currently `batch.map((c) => c.content)`):
+Change the import line (currently `import { assertCompleteLawSet, chunkRulebook } from "./chunk";`):
+
+```ts
+import { applyEmbeddingTextOverrides, assertCompleteLawSet, chunkRulebook } from "./chunk";
+```
+
+Then, in `main()`, right after the existing `assertCompleteLawSet(chunks);`
+line, add one new line assigning the result to a new variable:
+
+```ts
+  assertCompleteLawSet(chunks);
+  const finalChunks = applyEmbeddingTextOverrides(chunks);
+```
+
+Every reference to `chunks` **below** this point in `main()` (the embedding
+loop and the row-insert step, Steps 2 and 3 below) now uses `finalChunks`
+instead. The `chunks.length < 100` guard and `assertCompleteLawSet(chunks)`
+call **above** this point are unchanged and still use `chunks`.
+
+- [ ] **Step 2: Modify the embedding step**
+
+Change the embedding-step loop (currently iterates `chunks` and maps
+`(c) => c.content`):
 
 ```ts
   const embeddings: number[][] = [];
-  for (let i = 0; i < chunks.length; i += EMBED_BATCH_SIZE) {
+  for (let i = 0; i < finalChunks.length; i += EMBED_BATCH_SIZE) {
     if (i > 0) await new Promise((resolve) => setTimeout(resolve, 21_000));
-    const batch = chunks.slice(i, i + EMBED_BATCH_SIZE);
+    const batch = finalChunks.slice(i, i + EMBED_BATCH_SIZE);
     embeddings.push(
       ...(await embedTexts(
         batch.map((c) => c.embeddingText ?? c.content),
         "document",
       )),
     );
-    console.log(`embedded ${Math.min(i + EMBED_BATCH_SIZE, chunks.length)}/${chunks.length}`);
+    console.log(`embedded ${Math.min(i + EMBED_BATCH_SIZE, finalChunks.length)}/${finalChunks.length}`);
   }
 ```
 
-- [ ] **Step 2: Modify the row-insert step**
+- [ ] **Step 3: Modify the row-insert step**
 
-Change the `rows` map (currently missing `embedding_text`):
+Change the `rows` map (currently maps `chunks`, missing `embedding_text`):
 
 ```ts
-  const rows = chunks.map((c, i) => ({
+  const rows = finalChunks.map((c, i) => ({
     corpus_version: CORPUS_VERSION,
     law_number: c.lawNumber,
     breadcrumb: c.breadcrumb,
@@ -357,12 +392,12 @@ Change the `rows` map (currently missing `embedding_text`):
   }));
 ```
 
-- [ ] **Step 3: Type-check**
+- [ ] **Step 4: Type-check**
 
 Run: `npx tsc --noEmit`
 Expected: no errors.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add scripts/ingest/index.ts
@@ -548,12 +583,22 @@ Replace with:
 
 - [ ] **Step 2: Add two sentinel entries to `golden-questions.json`**
 
-Append to the array (before the closing `]`), matching the file's existing
-one-line-per-entry style:
+The file's current last line has **no trailing comma** (it's the last
+array element):
+```json
+  { "question": "Who is responsible for controlling the required distance between players and the ball at restarts?", "expected": ["Law 6 › 1"] }
+]
+```
+
+Add a comma to that existing last line, then append the two new entries
+before the closing `]`, matching the file's existing one-line-per-entry
+style:
 
 ```json
+  { "question": "Who is responsible for controlling the required distance between players and the ball at restarts?", "expected": ["Law 6 › 1"] },
   { "question": "A player who's already on a yellow card dives to win a free kick — does that automatically mean a second yellow and being sent off?", "expected": ["Law 12 › 4"] },
   { "question": "If a foul earns a penalty kick, does that let the referee give only a yellow card instead of a straight red for denying a goalscoring opportunity?", "expected": ["Law 12 › 4"] }
+]
 ```
 
 - [ ] **Step 3: Validate both files are valid JSON**
@@ -586,14 +631,20 @@ git commit -m "test: update issue #64 eval fixtures after the retrieval fix"
 
 Run: `npm run eval`
 
-Expected: completes (exit 0). Golden set: 32/32 recall@8 (30 original + 2
-new sentinels from Task 6) — if either new sentinel misses, STOP and
-investigate before proceeding (per spec §5.4, this would mean the fix
-disturbed an unrelated part of the corpus). Paraphrase set: 10/10, unchanged.
-Compound set: the first entry ("What happens if everyone on a team gets a
-red card?") should now show `Law 3 › 1` present in its per-question
-breadcrumb line at k=8 (previously always missing) — check the console
-output's `missed@8` line for this question no longer lists `Law 3 › 1`.
+**Exit code 0 only means the script ran to completion without crashing — it
+is not a pass signal on its own.** `run-evals.ts` reports per-tier scores in
+its console output regardless of whether they're good or bad; the actual
+pass/fail judgment requires reading that output, not just checking the
+process exit code. Read the console output and confirm:
+- Golden set: 32/32 recall@8 (30 original + 2 new sentinels from Task 6) —
+  if either new sentinel misses, STOP and investigate before proceeding
+  (per spec §5.4, this would mean the fix disturbed an unrelated part of
+  the corpus).
+- Paraphrase set: 10/10, unchanged.
+- Compound set: the first entry ("What happens if everyone on a team gets a
+  red card?") should now show `Law 3 › 1` present in its per-question
+  breadcrumb line at k=8 (previously always missing) — check the console
+  output's `missed@8` line for this question no longer lists `Law 3 › 1`.
 
 - [ ] **Step 2: Record the result in the spec's revision history**
 
@@ -627,4 +678,11 @@ git commit -m "docs: record post-fix eval results for issue #64"
   `c.embeddingText ?? null`. `applyEmbeddingTextOverrides` and
   `EMBEDDING_TEXT_OVERRIDES` are exported with those exact names from
   `scripts/ingest/chunk.ts` in Task 2 and referenced with those names in
-  Task 4's dry-run script.
+  Task 3's import and Task 4's dry-run script.
+
+## Revision history
+
+| Date | Change |
+|---|---|
+| 2026-07-19 | Initial plan. |
+| 2026-07-19 | Fable review (PR #70) found 2 BLOCKERs, both in Task 2: (1) the plan originally called `applyEmbeddingTextOverrides` from inside `chunkRulebook` itself, which would have broken every existing `chunkRulebook` unit test (the function throws on zero/multi-match, and no small test fixture contains the real Law 3 § 1 breadcrumb without also triggering the multi-match case) — fixed by moving the call to `index.ts`'s `main()`, mirroring where `assertCompleteLawSet` already runs, and leaving `chunkRulebook` completely untouched; (2) Task 2's "full file replacement" code block had silently deleted the exported `assertCompleteLawSet` function — fixed by replacing it with two small, targeted edits instead. Task 3 rewritten to add the new call site and use a `finalChunks` variable. Also folded in: a test covering the default-argument path (S1), an explicit POSIX-shell note in Global Constraints (S2), a missing comma fixed in the golden-questions.json append instructions (N1), and a clarification that `npm run eval`'s exit code alone isn't a pass signal (N2). |
