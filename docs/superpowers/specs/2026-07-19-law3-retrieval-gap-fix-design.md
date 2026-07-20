@@ -117,11 +117,12 @@ alter table chunks add column embedding_text text;
 ```
 
 Additive, nullable, no backfill, no risk to existing rows or queries —
-inert until the ingest code starts writing and reading it (§4.3). For 117
-of 118 chunks this column stays `null` forever; for the one overridden row
-it's a real, inspectable provenance record — anyone reading the row later
-can see exactly what text its embedding was actually computed from, rather
-than that fact only living transiently in `chunk.ts`'s override map with no
+inert until the ingest code starts writing it (§4.3). Nothing reads this
+column programmatically; it's a provenance record for humans, not an input
+to any query. For 117 of 118 chunks this column stays `null` forever; for
+the one overridden row anyone reading it later can see exactly what text
+its embedding was actually computed from, rather than that fact only
+living transiently in `chunk.ts`'s override map with no
 trace in the database.
 
 **Confirmed via direct query against the live corpus:** `Law 3 › 1. Number
@@ -181,19 +182,22 @@ verified against the live corpus: `websearch_to_tsquery('english', "What
 happens if everyone on a team gets a red card?")` matches zero chunks via
 the `fts` column, for this question as phrased — the keyword lane isn't
 contributing anything for this case either way, so there's no reason to
-touch the `fts` generated expression or its trigram/tsvector configuration
-as part of this fix. Vector similarity alone is what §4.2's bridging text
-targets.
+touch the `fts` generated expression or its tsvector configuration as part
+of this fix. Vector similarity alone is what §4.2's bridging text targets.
 
 **Rollout, in two stages:**
 1. **Dry-run validation first** — before committing to the full corpus
-   re-ingest, run one throwaway embedding call comparing the bridging
-   text's would-be fingerprint against the red-card question's fingerprint,
-   confirming it would actually place in the top-8 (today's 8th-place
-   similarity score is 0.389 — the bridging text needs to beat that). This
-   is a single Voyage call, not a re-ingest, so it's cheap to check before
-   spending the ~hour-long rate-limited full rebuild on a sentence that
-   might not move the needle enough.
+   re-ingest, embed the **full override string** (original Law 3 § 1 text
+   plus the appended bridging sentence, §4.2's map value verbatim — not the
+   bridging sentence alone, which is packed with red-card vocabulary and
+   would trivially score high in isolation, a false pass) using the same
+   `"document"` input type production ingest uses, and compare it against
+   the red-card question embedded with the same `"query"` input type
+   `searchChunks` uses. Confirm it would actually place in the top-8
+   (today's 8th-place similarity score is 0.389 — the override text needs
+   to beat that). This is a single Voyage call, not a re-ingest, so it's
+   cheap to check before spending the ~hour-long rate-limited full rebuild
+   on a sentence that might not move the needle enough.
 2. **Full re-ingest** — re-run the existing `npm run ingest` command, the
    same delete-and-reinsert-by-`corpus_version` process already in place
    (see `index.ts`'s existing comments on why this is safe as a
@@ -269,3 +273,4 @@ targets.
 |---|---|
 | 2026-07-19 | Initial spec — approved in-session after two rounds of live reproduction/systemic-check testing against the corpus. |
 | 2026-07-19 | Fable review (PR #69): fixed a real inconsistency between §4.2 (claimed the new column was "inert until ingest reads it") and §4.3 (the described mechanism never actually read or wrote that column) — `index.ts`'s row-insert step now explicitly writes `embedding_text`, making it a real provenance record instead of a column that would've stayed `null` forever. Folded in three non-blocking suggestions: a pre-re-ingest dry-run validation step, an explicit note that the keyword/full-text lane is deliberately left untouched (verified it matches zero chunks for this question anyway), and an exactly-one-match assertion on the override map (breadcrumbs aren't unique across the corpus). Everything else — root cause, the Round 1/Round 2 control-question results, the pipeline mechanism fitting the real code, and the bridging sentence's football accuracy — independently verified clean. |
+| 2026-07-19 | Fable follow-up review of the fix: **confirmed resolved, no remaining blockers.** One further SUGGESTION folded in — the dry-run step's wording now names the full override string explicitly (not just "the bridging text," which read literally could mean the appended sentence alone, a false-pass risk since it's packed with red-card vocabulary) and specifies matching production's `"document"`/`"query"` Voyage input types. Two cosmetic NITs fixed: §4.2 no longer claims the column is read (nothing reads it programmatically, it's a provenance record only), and §4.3 no longer references a nonexistent trigram configuration. |
