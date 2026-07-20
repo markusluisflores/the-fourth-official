@@ -30,8 +30,13 @@ provenance record. `content` — what's shown in citations — is never touched.
   `EMBED_BATCH_SIZE`'s existing 21-second gap in `scripts/ingest/index.ts`
   for precedent) or it 429s.
 - Migrations apply to the live Supabase project `the-fourth-official`
-  (`moybkceeltzwnyiaasys`) via the Supabase MCP `apply_migration` tool, with
-  the SQL file committed in the same commit as the code that uses it.
+  (`moybkceeltzwnyiaasys`) via the Supabase MCP `apply_migration` tool. This
+  plan's migration (Task 1) is committed on its own, ahead of the code that
+  uses it (Tasks 2-3) — safe because the new column is additive, nullable,
+  and inert (spec §4.2: no existing row or query is affected until the
+  ingest code starts writing to it). This is narrower than a general rule;
+  a migration that isn't safely inert on its own should ship in the same
+  commit as the code that depends on it.
 - Full spec: `docs/superpowers/specs/2026-07-19-law3-retrieval-gap-fix-design.md`
   (approved, merged, two rounds of Fable review — do not deviate from its
   approach without a plan revision on its own docs branch, per this
@@ -163,8 +168,13 @@ describe("applyEmbeddingTextOverrides", () => {
 
   // Exercises the default-argument path (no second argument passed — relies on the
   // exported EMBEDDING_TEXT_OVERRIDES constant), using the real Law 3 § 1 content so this
-  // also proves the default map's own hard-coded value is self-consistent with itself
-  // (i.e. its startsWith assertion actually passes against real rulebook text).
+  // also proves the default map's own hard-coded value passes its own startsWith
+  // assertion against real rulebook text, not just against a synthetic fixture.
+  // Assumes EMBEDDING_TEXT_OVERRIDES has exactly one entry (current scope, per the
+  // spec's explicit decision not to build a general multi-entry mechanism — see the
+  // spec's §2/§3 rejection of a corpus-wide sweep). If a second entry is ever added,
+  // this test's `chunks` array needs a matching second chunk too, or it will fail with
+  // a zero-match throw for the new entry before reaching the assertions below.
   it("uses EMBEDDING_TEXT_OVERRIDES by default when no override map is passed", () => {
     const realLaw3s1Content =
       "A match is played by two teams, each with a maximum of eleven players;\n" +
@@ -531,7 +541,8 @@ sentence), `content_len` = 740 (unchanged from before this fix).
 
 - [ ] **Step 3: Verify the fix directly against retrieval**
 
-Write a throwaway check (same pattern as Task 4 — do not commit):
+Write a throwaway check (same pattern as Task 4 — do not commit). Save the
+following as `_tmp-verify-fix.ts` in the repo root:
 
 ```ts
 // TEMPORARY — do not commit. Deleted at the end of this step.
@@ -647,6 +658,18 @@ process exit code. Read the console output and confirm:
   red card?") should now show `Law 3 › 1` present in its per-question
   breadcrumb line at k=8 (previously always missing) — check the console
   output's `missed@8` line for this question no longer lists `Law 3 › 1`.
+- **Abstain set / gate calibration — check this too, don't skip it.** The
+  bridging sentence adds broader vocabulary ("regardless of the reason...
+  sent off... red card") to one chunk's embedding, which could in principle
+  make that chunk score higher against an off-topic question than before,
+  shifting the reported "max off-topic maxSimilarity" figure in the
+  `=== Gate calibration ===` output. Confirm this figure is unchanged from
+  the pre-fix baseline (max off-topic maxSimilarity 0.493 — see the design
+  spec's own investigation notes, or the eval output from any recent prior
+  run for comparison). If it moved, that's not necessarily a blocker on its
+  own (gate calibration was already documented as "not separable" before
+  this fix), but it's a real behavior change worth surfacing to Markus
+  rather than silently absorbing into the revision history as a footnote.
 
 - [ ] **Step 2: Record the result in the spec's revision history**
 
@@ -688,3 +711,5 @@ git commit -m "docs: record post-fix eval results for issue #64"
 |---|---|
 | 2026-07-19 | Initial plan. |
 | 2026-07-19 | Fable review (PR #70) found 2 BLOCKERs, both in Task 2: (1) the plan originally called `applyEmbeddingTextOverrides` from inside `chunkRulebook` itself, which would have broken every existing `chunkRulebook` unit test (the function throws on zero/multi-match, and no small test fixture contains the real Law 3 § 1 breadcrumb without also triggering the multi-match case) — fixed by moving the call to `index.ts`'s `main()`, mirroring where `assertCompleteLawSet` already runs, and leaving `chunkRulebook` completely untouched; (2) Task 2's "full file replacement" code block had silently deleted the exported `assertCompleteLawSet` function — fixed by replacing it with two small, targeted edits instead. Task 3 rewritten to add the new call site and use a `finalChunks` variable. Also folded in: a test covering the default-argument path (S1), an explicit POSIX-shell note in Global Constraints (S2), a missing comma fixed in the golden-questions.json append instructions (N1), and a clarification that `npm run eval`'s exit code alone isn't a pass signal (N2). |
+| 2026-07-19 | Fable follow-up review of the fix: **both BLOCKERs confirmed resolved.** Found 3 more stale-text items from the editing pass itself, all fixed: Task 2's "Interfaces" block still described the pre-fix wiring (said `chunkRulebook`'s output sets `embeddingText` and Task 3 consumes it "indirectly via `chunkRulebook`" — neither true anymore); the to-be-committed code comment for `applyEmbeddingTextOverrides` repeated the disproven claim that no test fixture uses the real Law 3 § 1 breadcrumb (one does — the function is simply never invoked during that test, which is the real and sufficient reason it's unaffected); and a dangling sentence fragment left over from an earlier edit in Task 2 Step 4. |
+| 2026-07-19 | **Independent fresh-dispatch review** (no prior context, told not to defer to earlier comments): independently re-verified spec fidelity, mentally applied every plan step against the real current files, traced all 5 unit tests against the plan's own implementation, and confirmed the migration number, dry-run math, and operational baselines. Found **no BLOCKERs**, but 5 items none of the prior two rounds had caught: Task 1's migration commit contradicted the plan's own Global Constraint about migrations shipping with their consuming code (fixed by narrowing that constraint to explain why this specific migration is safe to commit standalone — it's additive, nullable, and inert per spec §4.2); Task 7's regression checklist covered only 3 of the eval suite's 4 tiers, missing the abstain/gate-calibration check — exactly where injected vocabulary in one chunk's embedding could shift an off-topic similarity score (added as an explicit check); the default-argument test would fail confusingly if a second override entry is ever added without a matching test fixture (added a scope-limiting comment); Task 5 Step 3 never explicitly said to save the throwaway script under its referenced filename (fixed); and redundant "self-consistent with itself" phrasing in a test comment (fixed). This is the second PR in this project run under the interim "do both resumed and fresh" review practice — again, the fresh round surfaced a non-overlapping set of findings from the resumed round (see `FABLE-HANDOFF.md`'s observation log). |
