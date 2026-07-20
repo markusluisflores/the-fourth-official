@@ -117,8 +117,12 @@ alter table chunks add column embedding_text text;
 ```
 
 Additive, nullable, no backfill, no risk to existing rows or queries —
-inert until the ingest code starts reading it (§4.3). For 117 of 118 chunks
-this column stays `null` forever.
+inert until the ingest code starts writing and reading it (§4.3). For 117
+of 118 chunks this column stays `null` forever; for the one overridden row
+it's a real, inspectable provenance record — anyone reading the row later
+can see exactly what text its embedding was actually computed from, rather
+than that fact only living transiently in `chunk.ts`'s override map with no
+trace in the database.
 
 **Confirmed via direct query against the live corpus:** `Law 3 › 1. Number
 of players` is a single row (id 258, 740 chars, well under the 1500-char
@@ -145,25 +149,56 @@ into something subtly inaccurate about the Laws.
 
 ### 4.3 Ingest pipeline changes
 
-Two edits, both in existing files:
+Three edits, all in existing files:
 
 1. **`scripts/ingest/chunk.ts`** — a small breadcrumb-keyed override map
    (one entry, for `"Law 3 › 1. Number of players"`) supplies the enriched
-   text. `RawChunk` gains an optional `embeddingText?: string` field,
-   populated from this map after chunking.
-2. **`scripts/ingest/index.ts`** — the embedding step changes from
+   text, as a full replacement string (the original text plus the bridging
+   sentence appended), not a suffix concatenated separately at ingest time —
+   so the map's value is exactly what gets embedded, with no string-building
+   logic to get wrong. `RawChunk` gains an optional `embeddingText?: string`
+   field, populated from this map after chunking. The map lookup must assert
+   it matches **exactly one** chunk — breadcrumbs are not guaranteed unique
+   across the corpus (e.g. `Law 3 › 2` already spans two rows today, from
+   `splitOversize`), so a silent zero-match or multi-match would be a bug
+   worth failing loudly on, the same defensive posture as
+   `assertCompleteLawSet`'s existing loud-failure pattern in this file.
+2. **`scripts/ingest/index.ts`, embedding step** — changes from
    `batch.map((c) => c.content)` to `batch.map((c) => c.embeddingText ??
    c.content)`. For every chunk except Law 3 § 1, `embeddingText` is
    `undefined`, so this is a no-op — identical behavior to today.
+3. **`scripts/ingest/index.ts`, row-insert step** — the row-building map
+   (currently `corpus_version`/`law_number`/`breadcrumb`/`content`/
+   `embedding`) also writes `embedding_text: c.embeddingText ?? null`, so
+   the new column (§4.2) is actually populated for the one overridden row
+   instead of staying `null` for every row including that one.
 
 `content` (and therefore what gets stored in the `content` column and shown
 in citations) is never touched.
 
-**Rollout:** re-run the existing `npm run ingest` command — the same
-delete-and-reinsert-by-`corpus_version` process already in place (see
-`index.ts`'s existing comments on why this is safe as a single-batch
-operation). Not a new or higher-risk operation than what's already used for
-every corpus rebuild.
+**Keyword/full-text lane is deliberately left unbridged.** Directly
+verified against the live corpus: `websearch_to_tsquery('english', "What
+happens if everyone on a team gets a red card?")` matches zero chunks via
+the `fts` column, for this question as phrased — the keyword lane isn't
+contributing anything for this case either way, so there's no reason to
+touch the `fts` generated expression or its trigram/tsvector configuration
+as part of this fix. Vector similarity alone is what §4.2's bridging text
+targets.
+
+**Rollout, in two stages:**
+1. **Dry-run validation first** — before committing to the full corpus
+   re-ingest, run one throwaway embedding call comparing the bridging
+   text's would-be fingerprint against the red-card question's fingerprint,
+   confirming it would actually place in the top-8 (today's 8th-place
+   similarity score is 0.389 — the bridging text needs to beat that). This
+   is a single Voyage call, not a re-ingest, so it's cheap to check before
+   spending the ~hour-long rate-limited full rebuild on a sentence that
+   might not move the needle enough.
+2. **Full re-ingest** — re-run the existing `npm run ingest` command, the
+   same delete-and-reinsert-by-`corpus_version` process already in place
+   (see `index.ts`'s existing comments on why this is safe as a
+   single-batch operation). Not a new or higher-risk operation than what's
+   already used for every corpus rebuild.
 
 ## 5. Testing / verification plan
 
@@ -216,15 +251,21 @@ every corpus rebuild.
 ## 7. Deliverables (implementation plan's checklist)
 
 1. Migration: `alter table chunks add column embedding_text text`.
-2. `chunk.ts`: `embeddingText?` field on `RawChunk` + one-entry override map.
-3. `index.ts`: embedding step prefers `embeddingText ?? content`.
-4. `npm run ingest` re-run against the live corpus.
-5. `evals/compound-questions.json`: first entry's `note` field updated.
-6. `evals/golden-questions.json`: two new sentinel entries (§5.3).
-7. Full eval suite run, results recorded in this spec's revision history.
+2. `chunk.ts`: `embeddingText?` field on `RawChunk` + one-entry override map,
+   asserting exactly one breadcrumb match.
+3. `index.ts`: embedding step prefers `embeddingText ?? content`; row-insert
+   step writes `embedding_text: c.embeddingText ?? null`.
+4. Dry-run validation: one throwaway embedding call confirming the bridging
+   text's fingerprint beats the current 8th-place similarity (0.389) before
+   committing to the full re-ingest.
+5. `npm run ingest` re-run against the live corpus.
+6. `evals/compound-questions.json`: first entry's `note` field updated.
+7. `evals/golden-questions.json`: two new sentinel entries (§5.3).
+8. Full eval suite run, results recorded in this spec's revision history.
 
 ## Revision history
 
 | Date | Change |
 |---|---|
 | 2026-07-19 | Initial spec — approved in-session after two rounds of live reproduction/systemic-check testing against the corpus. |
+| 2026-07-19 | Fable review (PR #69): fixed a real inconsistency between §4.2 (claimed the new column was "inert until ingest reads it") and §4.3 (the described mechanism never actually read or wrote that column) — `index.ts`'s row-insert step now explicitly writes `embedding_text`, making it a real provenance record instead of a column that would've stayed `null` forever. Folded in three non-blocking suggestions: a pre-re-ingest dry-run validation step, an explicit note that the keyword/full-text lane is deliberately left untouched (verified it matches zero chunks for this question anyway), and an exactly-one-match assertion on the override map (breadcrumbs aren't unique across the corpus). Everything else — root cause, the Round 1/Round 2 control-question results, the pipeline mechanism fitting the real code, and the bridging sentence's football accuracy — independently verified clean. |
