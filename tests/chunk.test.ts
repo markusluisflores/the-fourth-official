@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyEmbeddingTextOverrides,
   assertCompleteLawSet,
   chunkRulebook,
   MAX_CHUNK_CHARS,
@@ -135,5 +136,87 @@ describe("assertCompleteLawSet", () => {
 
   it("throws with an empty chunk list", () => {
     expect(() => assertCompleteLawSet([])).toThrow(/expected law numbers 1-17, got:/);
+  });
+});
+
+describe("applyEmbeddingTextOverrides", () => {
+  it("sets embeddingText on the one chunk matching an override breadcrumb", () => {
+    const chunks: RawChunk[] = [
+      { lawNumber: 3, breadcrumb: "Law 3 › 1. Number of players", content: "real text" },
+      { lawNumber: 3, breadcrumb: "Law 3 › 2. Number of substitutions", content: "other text" },
+    ];
+    const result = applyEmbeddingTextOverrides(chunks, {
+      "Law 3 › 1. Number of players": "real text plus extra hint",
+    });
+    expect(result.find((c) => c.breadcrumb === "Law 3 › 1. Number of players")!.embeddingText).toBe(
+      "real text plus extra hint",
+    );
+    expect(
+      result.find((c) => c.breadcrumb === "Law 3 › 2. Number of substitutions")!.embeddingText,
+    ).toBeUndefined();
+  });
+
+  it("throws if an override breadcrumb matches zero chunks", () => {
+    const chunks: RawChunk[] = [
+      { lawNumber: 3, breadcrumb: "Law 3 › 2. Number of substitutions", content: "other text" },
+    ];
+    expect(() =>
+      applyEmbeddingTextOverrides(chunks, {
+        "Law 3 › 1. Number of players": "real text plus extra hint",
+      }),
+    ).toThrow(/matched 0 chunks/);
+  });
+
+  it("throws if an override breadcrumb matches more than one chunk", () => {
+    const chunks: RawChunk[] = [
+      { lawNumber: 3, breadcrumb: "Law 3 › 1. Number of players", content: "real text" },
+      { lawNumber: 3, breadcrumb: "Law 3 › 1. Number of players", content: "real text part 2" },
+    ];
+    expect(() =>
+      applyEmbeddingTextOverrides(chunks, {
+        "Law 3 › 1. Number of players": "real text plus extra hint",
+      }),
+    ).toThrow(/matched 2 chunks/);
+  });
+
+  it("throws if the override text does not start with the chunk's real content", () => {
+    const chunks: RawChunk[] = [
+      { lawNumber: 3, breadcrumb: "Law 3 › 1. Number of players", content: "real text" },
+    ];
+    expect(() =>
+      applyEmbeddingTextOverrides(chunks, {
+        "Law 3 › 1. Number of players": "totally different text",
+      }),
+    ).toThrow(/does not start with the chunk's real content/);
+  });
+
+  // Exercises the default-argument path (no second argument passed — relies on the
+  // exported EMBEDDING_TEXT_OVERRIDES constant), using the real Law 3 § 1 content so this
+  // also proves the default map's own hard-coded value passes its own startsWith
+  // assertion against real rulebook text, not just against a synthetic fixture.
+  // Assumes EMBEDDING_TEXT_OVERRIDES has exactly one entry (current scope, per the
+  // spec's explicit decision not to build a general multi-entry mechanism — see the
+  // spec's §2/§3 rejection of a corpus-wide sweep). If a second entry is ever added,
+  // this test's `chunks` array needs a matching second chunk too, or it will fail with
+  // a zero-match throw for the new entry before reaching the assertions below.
+  it("uses EMBEDDING_TEXT_OVERRIDES by default when no override map is passed", () => {
+    const realLaw3s1Content =
+      "A match is played by two teams, each with a maximum of eleven players;\n" +
+      "one must be the goalkeeper. A match may not start or continue if either team\n" +
+      "has fewer than seven players.\n" +
+      "If a team has fewer than seven players because one or more players has\n" +
+      "deliberately left the field of play, the referee is not obliged to stop play and\n" +
+      "the advantage may be played, but the match must not resume after the ball has\n" +
+      "gone out of play if a team does not have the minimum number of seven players.\n" +
+      "If the competition rules state that all players and substitutes must be named\n" +
+      "before kick-off and a team starts a match with fewer than eleven players,\n" +
+      "only the players and substitutes named on the team list may take part in the\n" +
+      "match upon their arrival.";
+    const chunks: RawChunk[] = [
+      { lawNumber: 3, breadcrumb: "Law 3 › 1. Number of players", content: realLaw3s1Content },
+    ];
+    const result = applyEmbeddingTextOverrides(chunks); // no second argument
+    expect(result[0].embeddingText).toContain("red card");
+    expect(result[0].embeddingText).toContain(realLaw3s1Content);
   });
 });

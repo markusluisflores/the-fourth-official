@@ -4,6 +4,7 @@ export interface RawChunk {
   lawNumber: number;
   breadcrumb: string;
   content: string;
+  embeddingText?: string;
 }
 
 export const MAX_CHUNK_CHARS = 1500;
@@ -121,4 +122,65 @@ function packUnits(units: string[], glue: string): string[] {
   }
   if (buffer.trim()) pieces.push(buffer.trim());
   return pieces;
+}
+
+// Breadcrumb-keyed overrides: enriched text fed to the embedding step instead of the
+// chunk's real content, so its search fingerprint can be nudged closer to phrasings the
+// bare rulebook text doesn't share vocabulary with. The chunk's displayed content is
+// never touched — only what gets embedded changes. Each entry must be the FULL
+// replacement text (original content + addition), not a suffix to concatenate, so
+// there's no string-building logic to get wrong. See
+// docs/superpowers/specs/2026-07-19-law3-retrieval-gap-fix-design.md for why each
+// entry exists and how its wording was chosen.
+export const EMBEDDING_TEXT_OVERRIDES: Record<string, string> = {
+  "Law 3 › 1. Number of players":
+    "A match is played by two teams, each with a maximum of eleven players;\n" +
+    "one must be the goalkeeper. A match may not start or continue if either team\n" +
+    "has fewer than seven players.\n" +
+    "If a team has fewer than seven players because one or more players has\n" +
+    "deliberately left the field of play, the referee is not obliged to stop play and\n" +
+    "the advantage may be played, but the match must not resume after the ball has\n" +
+    "gone out of play if a team does not have the minimum number of seven players.\n" +
+    "If the competition rules state that all players and substitutes must be named\n" +
+    "before kick-off and a team starts a match with fewer than eleven players,\n" +
+    "only the players and substitutes named on the team list may take part in the\n" +
+    "match upon their arrival.\n" +
+    "This rule applies regardless of the reason a team has fewer than seven players, " +
+    "including when players are sent off — for example after receiving a red card — " +
+    "and the team's number of players falls below the seven-player minimum.",
+};
+
+// Applies EMBEDDING_TEXT_OVERRIDES to a chunk list, setting embeddingText on the one
+// matching chunk per breadcrumb key. Called from index.ts's main() after
+// chunkRulebook() produces the full corpus — NOT called from inside chunkRulebook
+// itself, so chunkRulebook's own unit tests are unaffected: this function is never
+// invoked by chunkRulebook or by chunkRulebook's tests (one of those tests does use the
+// real "Law 3 › 1. Number of players" breadcrumb in its fixture, but that's irrelevant
+// here — this function simply never runs during that test). Fails loudly (never
+// silently) on a breadcrumb that matches
+// zero or more than one chunk (breadcrumbs are not guaranteed unique — see
+// splitOversize, which already produces multiple chunks sharing one breadcrumb for
+// oversized sections), and on an override value that doesn't start with the chunk's
+// real content (guards against a hand-copy slip when the override was written, or
+// future corpus drift if the source PDF is ever replaced with a newer edition).
+export function applyEmbeddingTextOverrides(
+  chunks: RawChunk[],
+  overrides: Record<string, string> = EMBEDDING_TEXT_OVERRIDES,
+): RawChunk[] {
+  for (const [breadcrumb, embeddingText] of Object.entries(overrides)) {
+    const matches = chunks.filter((c) => c.breadcrumb === breadcrumb);
+    if (matches.length !== 1) {
+      throw new Error(
+        `embedding-text override for "${breadcrumb}" matched ${matches.length} chunks, expected exactly 1`,
+      );
+    }
+    if (!embeddingText.startsWith(matches[0].content)) {
+      throw new Error(
+        `embedding-text override for "${breadcrumb}" does not start with the chunk's real content`,
+      );
+    }
+  }
+  return chunks.map((c) =>
+    c.breadcrumb in overrides ? { ...c, embeddingText: overrides[c.breadcrumb] } : c,
+  );
 }
