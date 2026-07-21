@@ -2,7 +2,7 @@
   {
     "question": "What happens if everyone on a team gets a red card?",
     "required": ["Law 3 › 1", "Law 7 › 5", "Law 10 › 2", "Law 10 › 3"],
-    "note": "The known Part 2b failure: fewer-than-7 abandonment vs penalty-shoot-out confusion. Full answer needs minimum players, abandoned-match consequence, how winners are determined, and when shoot-outs apply."
+    "note": "Fixed 2026-07-19 (issue #64): Law 3 › 1 previously never surfaced for this phrasing — a targeted embedding-text override closed the gap (docs/superpowers/specs/2026-07-19-law3-retrieval-gap-fix-design.md). Retained as a compound question: full answer still needs minimum players, abandoned-match consequence, how winners are determined, and when shoot-outs apply."
   },
   {
     "question": "Can a team keep playing if their goalkeeper is sent off and they have no substitutes left?",

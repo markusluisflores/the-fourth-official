@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { createClient } from "@supabase/supabase-js";
 import { embedTexts } from "../../lib/voyage";
 import { pdfToText } from "./parse";
-import { assertCompleteLawSet, chunkRulebook } from "./chunk";
+import { applyEmbeddingTextOverrides, assertCompleteLawSet, chunkRulebook } from "./chunk";
 import { CORPUS_VERSION, EMBED_BATCH_SIZE, INSERT_BATCH_SIZE, PDF_PATH } from "./config";
 
 const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
@@ -18,22 +18,25 @@ async function main() {
   // stray coincidental match (e.g. a table-of-contents entry) before it corrupts the
   // corpus silently. See assertCompleteLawSet in chunk.ts.
   assertCompleteLawSet(chunks);
+  const finalChunks = applyEmbeddingTextOverrides(chunks);
 
   // The project's Voyage account has no payment method attached, capping it at 3 RPM
   // (see config.ts's EMBED_BATCH_SIZE comment). Back off between batches so we don't
   // exceed that — confirmed empirically that back-to-back requests 429 even well under
   // the per-request token cap.
   const embeddings: number[][] = [];
-  for (let i = 0; i < chunks.length; i += EMBED_BATCH_SIZE) {
+  for (let i = 0; i < finalChunks.length; i += EMBED_BATCH_SIZE) {
     if (i > 0) await new Promise((resolve) => setTimeout(resolve, 21_000));
-    const batch = chunks.slice(i, i + EMBED_BATCH_SIZE);
+    const batch = finalChunks.slice(i, i + EMBED_BATCH_SIZE);
     embeddings.push(
       ...(await embedTexts(
-        batch.map((c) => c.content),
+        batch.map((c) => c.embeddingText ?? c.content),
         "document",
       )),
     );
-    console.log(`embedded ${Math.min(i + EMBED_BATCH_SIZE, chunks.length)}/${chunks.length}`);
+    console.log(
+      `embedded ${Math.min(i + EMBED_BATCH_SIZE, finalChunks.length)}/${finalChunks.length}`,
+    );
   }
 
   // Not wrapped in a transaction with the insert loop below. Safe today because: embeddings
@@ -49,11 +52,12 @@ async function main() {
     .eq("corpus_version", CORPUS_VERSION);
   if (delError) throw new Error(`delete failed: ${delError.message}`);
 
-  const rows = chunks.map((c, i) => ({
+  const rows = finalChunks.map((c, i) => ({
     corpus_version: CORPUS_VERSION,
     law_number: c.lawNumber,
     breadcrumb: c.breadcrumb,
     content: c.content,
+    embedding_text: c.embeddingText ?? null,
     embedding: embeddings[i],
   }));
   for (let i = 0; i < rows.length; i += INSERT_BATCH_SIZE) {
