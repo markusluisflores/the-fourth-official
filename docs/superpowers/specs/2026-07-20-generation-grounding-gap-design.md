@@ -287,7 +287,13 @@ its own task numbering.
   request that already receives the breaking 400, so it doesn't reduce or
   prevent the outage window — it only makes the resulting server log line
   easier to find after the fact. Not a throw (a false negative on an
-  unmaintained allowlist shouldn't break the endpoint on its own).
+  unmaintained allowlist shouldn't break the endpoint on its own). **The
+  allowlist itself must be kept in sync with the CLAUDE.md doc note**
+  (added 2026-07-20, fourth independent Fable review, PR #73): the
+  CLAUDE.md instruction to re-verify `temperature: 0` before a model swap
+  now also says to add the new model to `KNOWN_TEMPERATURE_SAFE_MODELS`
+  once verified — otherwise every legitimate future swap after the first
+  would trigger a permanent false-alarm warning on every request.
 
 ## Provenance
 
