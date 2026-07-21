@@ -68,5 +68,15 @@
     "question": "If, in the same passage of play inside the penalty area, an attacker's arm touches the ball in what looks like a handball, and then a defender immediately fouls that same attacker, which offense governs the restart — a penalty for the foul, or a free kick the other way for the handball?",
     "required": ["Law 5 › 3", "Law 12 › 1"],
     "note": "Tests whether retrieval surfaces the simultaneous-offense precedence rule (Law 5) alongside the handball offense definition itself (Law 12) — a real professional refereeing dispute about which infringement 'wins' when two happen in the same passage of play. Harvested from a real disputed 2026-07-19 incident (see issue #64/#65 comments)."
+  },
+  {
+    "question": "If the referee allows play to continue under advantage for a foul that would have warranted a red card, does the player still get sent off once the advantage phase ends?",
+    "required": ["Law 5 › 3", "Law 12 › 4"],
+    "note": "Law 5 › 3's advantage clause (the referee's authority to let play continue) and Law 12 › 4's explicit statement that a caution/sending-off already earned is not cancelled by playing advantage are two separate sections a full answer needs. Added issue #65 (generation-grounding fix) as a new generation-completeness test case, verified against the live corpus 2026-07-20."
+  },
+  {
+    "question": "If a player who is already on a yellow card receives a second caution later in the same match and is sent off, can their team substitute another player in to replace them?",
+    "required": ["Law 3 › 6", "Law 12 › 4"],
+    "note": "Law 12 › 4 lists 'receiving a second caution in the same match' as a sending-off offence; Law 3 › 6 separately states a player sent off after kick-off cannot be replaced. A full answer needs both. Added issue #65 (generation-grounding fix) as a new generation-completeness test case, verified against the live corpus 2026-07-20."
   }
 ]
