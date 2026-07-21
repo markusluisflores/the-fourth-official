@@ -222,8 +222,9 @@ and completeness rather than relying on the theoretical argument in
 
 ## 5. Testing / Success Criteria
 
-- **Golden + paraphrase (42 total):** 100% still cite their single
-  required breadcrumb at temperature 0; no refusals or degenerate output.
+- **Golden + paraphrase (~40-42 total, exact count depends on `main`'s
+  state — see below):** 100% still cite their single required breadcrumb
+  at temperature 0; no refusals or degenerate output.
 - **Compound (14 existing + new):** completeness check pass rate at
   temperature 0 reported and compared against the existing retrieval-only
   baseline; any regression investigated before this is considered
@@ -234,6 +235,14 @@ and completeness rather than relying on the theoretical argument in
   reviewed for consistent hedging. Also run once at temperature 1.0 (the
   current baseline) for direct before/after comparison, recorded in this
   spec's revision history once measured.
+
+**Note on the golden count (added 2026-07-20, independent fresh Fable
+review, PR #73):** as of this spec's authoring, `main` has 30 golden
+questions (40 golden + paraphrase total), not 32 (42 total) — issue #64's
+PR #72, which adds 2 golden sentinels, had not yet merged. If it merges
+before this fix executes, the real total becomes 42; the implementation
+plan's Global Constraints section already carries this same caveat for
+its own task numbering.
 
 ## 6. Open questions / risks
 
@@ -269,11 +278,16 @@ and completeness rather than relying on the theoretical argument in
   they would edit the Railway env var and never open that file. The
   implementation plan's mitigation must therefore live where that person
   would actually see it: a warning in CLAUDE.md's `ANTHROPIC_MODEL`
-  documentation itself, plus a runtime allowlist check (known-safe model
-  name substrings) that logs a clear, actionable warning server-side if
-  `ANSWER_MODEL()` doesn't match — not a throw (a false negative on an
-  unmaintained allowlist shouldn't break the endpoint), but a loud,
-  greppable signal instead of a silent gap.
+  documentation itself — this is the actual prevention, since it's read
+  before the change is made — plus a runtime allowlist check (known-safe
+  model name substrings) that logs a clear warning server-side if
+  `ANSWER_MODEL()` doesn't match. **The runtime check is a diagnostic aid,
+  not a preventive one** (corrected 2026-07-20, independent fresh Fable
+  review, PR #73): it fires from inside `streamAnswer` on the same
+  request that already receives the breaking 400, so it doesn't reduce or
+  prevent the outage window — it only makes the resulting server log line
+  easier to find after the fact. Not a throw (a false negative on an
+  unmaintained allowlist shouldn't break the endpoint on its own).
 
 ## Provenance
 

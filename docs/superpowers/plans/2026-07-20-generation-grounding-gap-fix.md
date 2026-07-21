@@ -155,14 +155,19 @@ existing `MAX_ANSWER_TOKENS` line (currently line 7), before
 // (no silent-coercion path for a non-1.0 value). Verified live against
 // the current ANSWER_MODEL (claude-haiku-4-5) on 2026-07-20 — temperature
 // 0 works today. See CLAUDE.md's ANTHROPIC_MODEL secrets entry before
-// ever changing that env var — warnIfTemperatureUnsafe() below is a
-// best-effort runtime backstop, not a substitute for reading it first.
+// ever changing that env var — that doc note is the actual prevention
+// (read before the change is made). warnIfTemperatureUnsafe() below is
+// diagnostic, not preventive: it fires on the same request that already
+// hits the breaking 400, so it only makes the resulting server log
+// easier to find after the fact — it does not stop the outage.
 export const TEMPERATURE = 0;
 
-// Best-effort allowlist backstop for the risk above. Not an authoritative
-// capability check (Anthropic doesn't expose one) — a false negative here
-// only produces a loud server-log warning, never a thrown error, since an
-// unmaintained allowlist shouldn't break the endpoint on its own.
+// Best-effort allowlist backstop for the risk above — a diagnostic aid,
+// not a preventive one (see the comment on TEMPERATURE). Not an
+// authoritative capability check (Anthropic doesn't expose one) — a
+// false negative here only produces a loud server-log warning, never a
+// thrown error, since an unmaintained allowlist shouldn't break the
+// endpoint on its own.
 const KNOWN_TEMPERATURE_SAFE_MODELS = ["claude-haiku-4-5"];
 
 export function warnIfTemperatureUnsafe(model: string): void {
@@ -288,26 +293,105 @@ git commit -m "feat: temperature control, hardened grounding prompt, citedBreadc
 ### Task 2: `evals/generation-harness.ts` — real generation harness
 
 **Files:**
+- Create: `evals/voyage-retry.ts`
 - Create: `evals/generation-harness.ts`
+- Modify: `evals/run-evals.ts` (extract its existing retry wrapper to the
+  new shared file — see Step 2)
 
 **Interfaces:**
 - Consumes: `searchChunks` (`lib/retrieval.ts`, existing),
   `citedBreadcrumbs`, `streamAnswer`, `TEMPERATURE` (Task 1,
   `lib/answer.ts`).
-- Produces: `runGeneration(question, k?, temperature?): Promise<GenerationResult>`
+- Produces: `withVoyageRetry<T>(fn, maxAttempts?): Promise<T>` (moved from
+  `run-evals.ts`, now shared), and
+  `runGeneration(question, k?, temperature?): Promise<GenerationResult>`
   where `GenerationResult = { answerText: string; citedBreadcrumbs: string[] }`
   — consumed by Task 4's `run-evals.ts` changes.
 
-This is a thin composition of two existing live-service calls (retrieval,
-then generation) — not unit-tested, same precedent as
+**Why the retry wrapper has to move:** `run-evals.ts` already has
+`withVoyageRetry` for exactly this reason — Voyage's free tier (no
+payment method on file) is rate-limited to 3 requests/minute, and every
+existing retrieval call in that file routes through it
+(`searchWithRetry`). `generation-harness.ts` needs the same protection for
+its own `searchChunks` call (Task 6's verification run makes 50+
+sequential calls with no gaps otherwise), but it cannot import
+`withVoyageRetry` directly from `run-evals.ts` — Task 4 makes
+`run-evals.ts` import `runGeneration` from `generation-harness.ts`, and a
+reverse import would create a circular dependency between the two files.
+Extracting the wrapper to its own file breaks the cycle.
+
+This harness is a thin composition of live-service calls (retrieval, then
+generation) — not unit-tested itself, same precedent as
 `scripts/ingest/index.ts` (an operational script verified by running it,
 not by Vitest). Its own verification is Task 6's live run.
+`withVoyageRetry` is moved, not rewritten, so no new tests are needed for
+it either — its behavior is unchanged, only its location.
 
-- [ ] **Step 1: Write the file**
+- [ ] **Step 1: Extract the shared retry wrapper**
+
+Write `evals/voyage-retry.ts` — this is `run-evals.ts`'s existing
+`sleep`/`withVoyageRetry` (currently lines 53-72), moved verbatim:
+
+```ts
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Voyage's free tier (no payment method on file) is rate-limited to 3 requests/minute.
+// Retry with backoff on 429s so eval runs survive the free-tier limit end to end.
+export async function withVoyageRetry<T>(fn: () => Promise<T>, maxAttempts = 6): Promise<T> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!message.includes("429") || attempt === maxAttempts) throw err;
+      const backoffMs = 20_000 * attempt;
+      console.error(
+        `  (rate limited, retry ${attempt}/${maxAttempts - 1} in ${backoffMs / 1000}s)`,
+      );
+      await sleep(backoffMs);
+    }
+  }
+  throw new Error("unreachable");
+}
+```
+
+- [ ] **Step 2: Refactor `run-evals.ts` to import the shared wrapper**
+
+Remove the `sleep` and `withVoyageRetry` definitions (currently lines
+53-72) from `evals/run-evals.ts` entirely. Add an import for the moved
+function instead, next to the existing imports at the top of the file:
+
+```ts
+import { withVoyageRetry } from "./voyage-retry";
+```
+
+The existing `searchWithRetry` (currently lines 74-75) stays in
+`run-evals.ts` unchanged — it already just calls `withVoyageRetry`, which
+now resolves to the imported function instead of the local one:
+
+```ts
+const searchWithRetry = (question: string, k: number) =>
+  withVoyageRetry(() => searchChunks(question, k));
+```
+
+- [ ] **Step 3: Verify the refactor didn't change behavior**
+
+Run: `npx tsc --noEmit`
+Expected: no errors.
+
+Run: `npx vitest run tests/evals.test.ts`
+Expected: PASS — this refactor only relocates `withVoyageRetry`, it
+doesn't change `matchesExpected`/`scoreQuestion`/`coverageScore`, so the
+existing tests are unaffected. (`withVoyageRetry` itself was never unit
+tested before this move and isn't now either — same precedent as other
+live-service orchestration in this file.)
+
+- [ ] **Step 4: Write `evals/generation-harness.ts`**
 
 ```ts
 import { searchChunks } from "../lib/retrieval";
 import { citedBreadcrumbs, streamAnswer, TEMPERATURE } from "../lib/answer";
+import { withVoyageRetry } from "./voyage-retry";
 
 export interface GenerationResult {
   answerText: string;
@@ -318,14 +402,16 @@ export interface GenerationResult {
 // Used by run-evals.ts's --generation mode to check what a generated
 // answer actually cites and says, not just what retrieval surfaced.
 // Costs one real Anthropic call per invocation — unlike the rest of the
-// eval suite (Voyage-only, free). See
+// eval suite (Voyage-only, free). The retrieval half is wrapped in
+// withVoyageRetry for the same free-tier rate-limit reason every other
+// retrieval call in this eval suite is. See
 // docs/superpowers/specs/2026-07-20-generation-grounding-gap-design.md §4.2.3.
 export async function runGeneration(
   question: string,
   k = 8,
   temperature: number = TEMPERATURE,
 ): Promise<GenerationResult> {
-  const { chunks } = await searchChunks(question, k);
+  const { chunks } = await withVoyageRetry(() => searchChunks(question, k));
   let answerText = "";
   let citedDocumentIndexes: number[] = [];
   for await (const event of streamAnswer(question, chunks, undefined, temperature)) {
@@ -336,16 +422,16 @@ export async function runGeneration(
 }
 ```
 
-- [ ] **Step 2: Type-check**
+- [ ] **Step 5: Type-check**
 
 Run: `npx tsc --noEmit`
 Expected: no errors.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add evals/generation-harness.ts
-git commit -m "feat: add real-generation eval harness (issue #65)"
+git add evals/voyage-retry.ts evals/generation-harness.ts evals/run-evals.ts
+git commit -m "feat: add real-generation eval harness, extract shared Voyage retry wrapper (issue #65)"
 ```
 
 ---
@@ -366,7 +452,7 @@ the actual top-8 for both questions today. **This second check matters
 and is easy to skip:** a breadcrumb can exist and genuinely support a
 question in the DB while still not ranking in the top-8 for reasons
 unrelated to this fix (embedding distance, corpus size) — which would
-make Task 4's `runGenerationCompletenessSet` (fixed `k=8`) report a
+make Task 4's `runGenerationCompoundSet` (fixed `k=8`) report a
 permanent, unrelated false MISS. Any future compound-questions.json entry
 must be checked against real retrieval output, not just table content,
 before being added.
@@ -423,13 +509,28 @@ git commit -m "test: add 2 multi-citation compound questions for generation comp
 
 **Interfaces:**
 - Consumes: `runGeneration` (Task 2, `evals/generation-harness.ts`),
-  `TEMPERATURE` (Task 1, `lib/answer.ts`), `coverageScore` (existing, this
-  file).
+  `TEMPERATURE` (Task 1, `lib/answer.ts`), `scoreQuestion` and
+  `coverageScore` (existing, this file).
 - Produces: `parseTemperatureArg(): number`, `parseRepeatArg(): number` —
-  pure, exported for testing. `runGenerationCompletenessSet` and
-  `runHedgeSet` are internal orchestration (not exported, not unit
-  tested — same live-service precedent as `runGoldenSet`/`runCompoundSet`
-  already in this file).
+  pure, exported for testing. `runGenerationGoldenSet`,
+  `runGenerationCompoundSet`, and `runHedgeSet` are internal orchestration
+  (not exported, not unit tested — same live-service precedent as
+  `runGoldenSet`/`runCompoundSet` already in this file).
+
+**Why two completeness functions, not one:** `Golden.expected: string[]`
+and `CompoundQuestion.required: string[]` look like the same shape but
+mean different things. `expected` is OR-semantics — `scoreQuestion`
+already treats it as "any of these counts as a hit" (see
+`evals.test.ts`'s "honours any of several expected sections" test).
+`required` is AND-semantics — `coverageScore` treats it as "every one of
+these must be present." Running golden/paraphrase questions through
+`coverageScore` would silently misscore any future golden question
+authored with legitimate OR-alternatives as an incomplete answer even
+when the model correctly cited one of them. Reusing `scoreQuestion` for
+golden/paraphrase (mirroring how `runGoldenSet` already scores their
+retrieval) and `coverageScore` only for compound questions (which are
+inherently AND/multi-citation by design) keeps each check's semantics
+correct.
 
 - [ ] **Step 1: Write the failing tests for the two pure argv parsers**
 
@@ -503,26 +604,49 @@ Add the two orchestration functions, after the existing
 `runCompoundSetDecomposed` function and before `async function main()`:
 
 ```ts
-async function runGenerationCompletenessSet(
+// OR-semantics (mirrors runGoldenSet's retrieval-side scoring): a hit is
+// citing ANY of the expected breadcrumbs, not all of them.
+async function runGenerationGoldenSet(
   label: string,
-  questions: { question: string; required: string[] }[],
+  questions: Golden[],
+  temperature: number,
+): Promise<void> {
+  let hits = 0;
+  for (const g of questions) {
+    const { citedBreadcrumbs } = await runGeneration(g.question, 8, temperature);
+    const rank = scoreQuestion(
+      citedBreadcrumbs.map((breadcrumb) => ({ breadcrumb })),
+      g.expected,
+    );
+    if (rank > 0) hits += 1;
+    console.log(`${rank > 0 ? `CITED@${rank}` : "NOT CITED"}  ${g.question}`);
+  }
+  console.log(
+    `\n[${label} — generation completeness, temperature=${temperature}] cited: ${hits}/${questions.length}`,
+  );
+}
+
+// AND-semantics (mirrors runCompoundSet's retrieval-side scoring): every
+// required breadcrumb must be cited, not just one of them.
+async function runGenerationCompoundSet(
+  compounds: CompoundQuestion[],
   temperature: number,
 ): Promise<void> {
   let full = 0;
-  for (const q of questions) {
-    const { citedBreadcrumbs } = await runGeneration(q.question, 8, temperature);
+  for (const c of compounds) {
+    const { citedBreadcrumbs } = await runGeneration(c.question, 8, temperature);
     const { missed } = coverageScore(
       citedBreadcrumbs.map((breadcrumb) => ({ breadcrumb })),
-      q.required,
+      c.required,
     );
     if (missed.length === 0) full += 1;
     console.log(
-      `${missed.length === 0 ? "FULL " : "MISS "} ${q.required.length - missed.length}/${q.required.length}  ${q.question}`,
+      `${missed.length === 0 ? "FULL " : "MISS "} ${c.required.length - missed.length}/${c.required.length}  ${c.question}`,
     );
     if (missed.length > 0) console.log(`  not cited in answer: ${missed.join(" | ")}`);
   }
   console.log(
-    `\n[${label} — generation completeness, temperature=${temperature}] full: ${full}/${questions.length}`,
+    `\n[compound — generation completeness, temperature=${temperature}] full: ${full}/${compounds.length}`,
   );
 }
 
@@ -570,22 +694,14 @@ Add the new mode dispatch in `main()`, right after the existing
     console.log(
       `=== Generation-level checks (temperature=${temperature}; calls the real Anthropic model — not free) ===`,
     );
-    console.log("\n=== Golden set — generation completeness ===");
-    await runGenerationCompletenessSet(
-      "golden",
-      goldens.map((g) => ({ question: g.question, required: g.expected })),
-      temperature,
-    );
+    console.log("\n=== Golden set — generation completeness (OR-semantics) ===");
+    await runGenerationGoldenSet("golden", goldens, temperature);
 
-    console.log("\n=== Paraphrase set — generation completeness ===");
-    await runGenerationCompletenessSet(
-      "paraphrase",
-      paraphrases.map((g) => ({ question: g.question, required: g.expected })),
-      temperature,
-    );
+    console.log("\n=== Paraphrase set — generation completeness (OR-semantics) ===");
+    await runGenerationGoldenSet("paraphrase", paraphrases, temperature);
 
-    console.log("\n=== Compound set — generation completeness ===");
-    await runGenerationCompletenessSet("compound", compounds, temperature);
+    console.log("\n=== Compound set — generation completeness (AND-semantics) ===");
+    await runGenerationCompoundSet(compounds, temperature);
 
     console.log("\n=== Hedge set — MANUAL REVIEW REQUIRED (not automated pass/fail) ===");
     await runHedgeSet(hedges, temperature, repeat);
@@ -648,13 +764,20 @@ against the live corpus, beyond the original reproduction question:
 - *"If a goalkeeper's own hand or arm accidentally deflects the ball into
   their own team's goal, does that own goal count, or is it disallowed
   the same way a handball goal against the opponents would be?"* —
-  **genuine hit.** `Law 12 › 1` is the top retrieval hit (similarity
-  0.667) and explicitly covers a goalkeeper scoring *in the opponents'
-  goal* off their own hand/arm ("scores in the opponents' goal: directly
-  from their hand/arm, even if accidental, including by the goalkeeper")
-  — but never addresses the reverse: a goalkeeper's hand/arm deflecting
-  the ball into their *own* goal. Same shape as the original bug (a rule
-  stated for one specific configuration, asked about a different one).
+  **genuine hit.** `Law 12 › 1` has the highest raw similarity among the
+  top-8 (0.667) — though it ranks 4th in the actual fused (hybrid
+  vector+keyword) result order, behind three lower-similarity Law 12
+  §2/3/4 chunks; doesn't affect the finding, since it's still safely
+  inside the k=8 the harness uses. It explicitly covers a goalkeeper
+  scoring *in the opponents' goal* off their own hand/arm ("scores in the
+  opponents' goal: directly from their hand/arm, even if accidental,
+  including by the goalkeeper") — but never addresses the reverse: a
+  goalkeeper's hand/arm deflecting the ball into their *own* goal. Same
+  shape as the original bug (a rule stated for one specific
+  configuration, asked about a different one). Corrected 2026-07-20
+  (independent fresh Fable review, PR #73) from an earlier, imprecise
+  "top retrieval hit" claim that conflated similarity value with fused
+  rank position.
 
 Write `evals/hedge-questions.json`:
 
@@ -666,7 +789,7 @@ Write `evals/hedge-questions.json`:
   },
   {
     "question": "If a goalkeeper's own hand or arm accidentally deflects the ball into their own team's goal, does that own goal count, or is it disallowed the same way a handball goal against the opponents would be?",
-    "note": "New for issue #65's generation-grounding fix, verified 2026-07-20. Law 12 › 1 is the top retrieval hit (similarity 0.667) and explicitly covers a goalkeeper scoring in the OPPONENTS' goal off their own hand/arm, but never addresses the reverse case of a deflection into their OWN goal. Correct behavior: hedge, not assert a specific ruling."
+    "note": "New for issue #65's generation-grounding fix, verified 2026-07-20. Law 12 › 1 has the highest similarity among the top-8 (0.667, ranked 4th in the fused result order) and explicitly covers a goalkeeper scoring in the OPPONENTS' goal off their own hand/arm, but never addresses the reverse case of a deflection into their OWN goal. Correct behavior: hedge, not assert a specific ruling."
   }
 ]
 ```
@@ -786,8 +909,11 @@ git commit -m "docs: record post-fix generation-grounding verification results (
 - **Type consistency:** `citedBreadcrumbs`, `TEMPERATURE`,
   `warnIfTemperatureUnsafe`, and `streamAnswer`'s 4th `temperature`
   parameter (Task 1) are the exact names Task 2's `runGeneration` imports
-  and uses. `GenerationResult`'s `citedBreadcrumbs` field (Task 2) is the
-  exact name Task 4's `runGenerationCompletenessSet` destructures.
+  and uses. `withVoyageRetry` (Task 2, moved to `evals/voyage-retry.ts`)
+  is the exact name both `run-evals.ts`'s existing `searchWithRetry` and
+  `generation-harness.ts`'s `runGeneration` import. `GenerationResult`'s
+  `citedBreadcrumbs` field (Task 2) is the exact name Task 4's
+  `runGenerationGoldenSet` and `runGenerationCompoundSet` destructure.
   `HedgeQuestion` (Task 4) matches the exact shape Task 5's JSON file
   produces.
 
@@ -797,3 +923,4 @@ git commit -m "docs: record post-fix generation-grounding verification results (
 |---|---|
 | 2026-07-20 | Initial plan. |
 | 2026-07-20 | Fable review (PR #73, fresh dispatch): confirmed root-cause analysis, chosen fix, and all plan code/file-line references accurate against `main` and the live corpus — found 1 BLOCKER (the temperature-deprecation mitigation was a code comment in a file the actual risk-triggering action, a Railway `ANTHROPIC_MODEL` env var change, would never touch) and 3 SUGGESTIONs. Fixed: Task 1 now updates CLAUDE.md's `ANTHROPIC_MODEL` doc directly and adds a runtime `warnIfTemperatureUnsafe` allowlist check (with tests), replacing the comment-only mitigation; corrected the spec's inaccurate "silently coerced" claim (this app's `temperature: 0` only hits the loud-400 path, not silent coercion); Task 3 now documents that both new compound-questions.json entries were verified against real `searchChunks` output, not just DB content, and states this as a requirement for future entries; Task 5's previously-deferred hedge-question investigation was completed now instead (same effort, no reason to defer) — found one additional genuine gap (goalkeeper own-goal-via-handball) alongside a third confirmed dead end, so `evals/hedge-questions.json` now ships with 2 verified questions instead of 1. |
+| 2026-07-20 | Resumed-thread verification: confirmed all 4 fixes above resolved (re-ran `searchChunks`, re-checked CLAUDE.md placement, re-traced code and tests by hand). **Independent fresh Fable review** (no prior context, told not to defer to earlier comments) on the resulting diff found a NEW BLOCKER neither prior round had caught: Task 2's `generation-harness.ts` called `searchChunks` directly, bypassing `run-evals.ts`'s existing `withVoyageRetry` backoff wrapper — live-confirmed this crashes with a Voyage 429 after 3 sequential calls, meaning Task 6's own mandated ~56-call verification run would abort partway through every time. Plus 3 SUGGESTIONs and 1 NIT. Fixed: extracted the shared retry wrapper to a new `evals/voyage-retry.ts` (avoiding a circular import between `generation-harness.ts` and `run-evals.ts`), refactored `run-evals.ts` to import it instead of defining it locally; split the single `runGenerationCompletenessSet` into `runGenerationGoldenSet` (OR-semantics, matching `Golden.expected`'s existing design) and `runGenerationCompoundSet` (AND-semantics, matching `CompoundQuestion.required`) — the original conflated both, which would have silently misscored any future golden question authored with legitimate OR-alternatives; clarified in both the spec and Task 1's code comments that `warnIfTemperatureUnsafe` is a diagnostic aid (makes the outage easier to find in logs) not a preventive one (the CLAUDE.md doc note is the actual prevention); corrected spec §5's stale "42 total" golden+paraphrase count to note it depends on whether PR #72 has merged; fixed an imprecise "top retrieval hit" claim for the goalkeeper hedge question (highest similarity, but ranked 4th in the actual fused top-8 — doesn't change the finding, just the wording). This is a third data point (after PR #69, #70, and this same PR #73's own first round) for the still-open fresh-vs-resumed review policy question: the resumed thread did real, additional verification work each time, but the independent fresh round again surfaced a materially different, non-overlapping, and this time more severe class of finding (a live-reproducible crash in the plan's own required verification step) than either the original or resumed rounds caught. |
