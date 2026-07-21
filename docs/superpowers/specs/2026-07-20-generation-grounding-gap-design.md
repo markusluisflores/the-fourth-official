@@ -252,14 +252,28 @@ and completeness rather than relying on the theoretical argument in
   values will be rejected with a 400 error." Verified empirically against
   the live API (2026-07-20): `temperature: 0` succeeds against
   `claude-haiku-4-5`, this app's actual model — the deprecation does not
-  bite today. But `ANSWER_MODEL` in `lib/answer.ts` is deliberately
-  env-swappable ("one line to trade up to Sonnet/Opus," per its own code
-  comment) — if `ANTHROPIC_MODEL` is ever pointed at a model released
-  after the deprecation cutoff, `temperature: 0` would start being
-  silently coerced to 1.0 or rejected outright with a 400, defeating this
-  entire fix without any code change to flag it. The implementation plan
-  should add a guard or at least a code comment at the `temperature: 0`
-  call site warning future maintainers of this specific model-swap risk.
+  bite today. **Corrected 2026-07-20 (Fable review, PR #73):** because
+  this app sets `temperature: 0`, not `1.0`, there is no silent-coercion
+  path for it — the SDK's own quoted text only accepts `1.0` silently, so
+  the only failure mode past the deprecation cutoff is a loud 400
+  rejection. That's a full outage of the `/api/ask` generation endpoint,
+  not a silent quality regression — a stronger case for a real mitigation
+  than a source comment alone.
+
+  `ANSWER_MODEL` in `lib/answer.ts` is deliberately env-swappable ("one
+  line to trade up to Sonnet/Opus," per its own code comment) — but the
+  actual mechanism for swapping it is the `ANTHROPIC_MODEL` **Railway
+  environment variable** (documented in this project's CLAUDE.md Secrets
+  section), not a code change. A comment at the `temperature: 0` call
+  site in `lib/answer.ts` is invisible to whoever performs that swap —
+  they would edit the Railway env var and never open that file. The
+  implementation plan's mitigation must therefore live where that person
+  would actually see it: a warning in CLAUDE.md's `ANTHROPIC_MODEL`
+  documentation itself, plus a runtime allowlist check (known-safe model
+  name substrings) that logs a clear, actionable warning server-side if
+  `ANSWER_MODEL()` doesn't match — not a throw (a false negative on an
+  unmaintained allowlist shouldn't break the endpoint), but a loud,
+  greppable signal instead of a silent gap.
 
 ## Provenance
 
@@ -281,3 +295,4 @@ without leaving the exact failure this issue reports unverified.
 | Date | Change |
 |---|---|
 | 2026-07-20 | Initial spec — approved in-session after iterative scoping discussion (temperature value, completeness vs. hedging check split, manual-review boundary for the hedging check). |
+| 2026-07-20 | Fable review (PR #73, fresh dispatch): found the §6 deprecation risk mitigation was placed where the actual risk-triggering action (a Railway `ANTHROPIC_MODEL` env var change) would never see it, and that the risk's own wording misstated the SDK's documented behavior (no silent-coercion path for this app's `temperature: 0` — only a loud 400). Root-cause analysis, chosen fix, and both new compound-questions.json entries (retrieval rank included, not just DB content) independently re-verified live and confirmed accurate. Fixed: corrected the wording, elevated the mitigation to a CLAUDE.md doc update plus a runtime allowlist warning (implementation plan Task 1 updated to match). |

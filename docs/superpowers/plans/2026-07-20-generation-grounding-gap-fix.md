@@ -56,9 +56,11 @@ questions, and a manual-review hedging check for a new
 **Interfaces:**
 - Consumes: nothing new.
 - Produces: `TEMPERATURE` (exported constant, `0`), `streamAnswer`'s 4th
-  parameter `temperature: number = TEMPERATURE`, and a new exported
-  function `citedBreadcrumbs(chunks: RetrievedChunk[], citedDocumentIndexes: number[]): string[]`
-  — both consumed by Task 2's harness.
+  parameter `temperature: number = TEMPERATURE`, a new exported function
+  `citedBreadcrumbs(chunks: RetrievedChunk[], citedDocumentIndexes: number[]): string[]`
+  — both consumed by Task 2's harness — and a new exported function
+  `warnIfTemperatureUnsafe(model: string): void`, called internally by
+  `streamAnswer` only (not consumed by later tasks).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -77,6 +79,22 @@ describe("citedBreadcrumbs", () => {
 
   it("returns an empty array when nothing was cited", () => {
     expect(citedBreadcrumbs([chunk(1, "Law 11 › 1. Offside position")], [])).toEqual([]);
+  });
+});
+
+describe("warnIfTemperatureUnsafe", () => {
+  it("does not warn for a known temperature-safe model", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    warnIfTemperatureUnsafe("claude-haiku-4-5");
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("warns for a model not on the known-safe allowlist", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    warnIfTemperatureUnsafe("claude-opus-9-hypothetical");
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("claude-opus-9-hypothetical"));
+    spy.mockRestore();
   });
 });
 ```
@@ -103,7 +121,13 @@ existing `it`, before its closing `});`):
 Update the import line at the top of `tests/answer.test.ts`:
 
 ```ts
-import { citedBreadcrumbs, documentBlocks, streamAnswer, type AnswerEvent } from "../lib/answer";
+import {
+  citedBreadcrumbs,
+  documentBlocks,
+  streamAnswer,
+  warnIfTemperatureUnsafe,
+  type AnswerEvent,
+} from "../lib/answer";
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -126,12 +150,30 @@ existing `MAX_ANSWER_TOKENS` line (currently line 7), before
 // docs/superpowers/specs/2026-07-20-generation-grounding-gap-design.md.
 //
 // RISK: the Anthropic SDK deprecates the `temperature` parameter for
-// models released after Claude Opus 4.6 (non-1.0 values get silently
-// coerced to 1.0 or rejected with a 400). Verified live against the
-// current ANSWER_MODEL (claude-haiku-4-5) on 2026-07-20 — temperature 0
-// works today. Re-verify live before ever changing ANTHROPIC_MODEL to a
-// newer model generation (see the spec's §6).
+// models released after Claude Opus 4.6 — this app's value of 0 (not 1.0)
+// would be REJECTED with a loud 400, breaking answer generation entirely
+// (no silent-coercion path for a non-1.0 value). Verified live against
+// the current ANSWER_MODEL (claude-haiku-4-5) on 2026-07-20 — temperature
+// 0 works today. See CLAUDE.md's ANTHROPIC_MODEL secrets entry before
+// ever changing that env var — warnIfTemperatureUnsafe() below is a
+// best-effort runtime backstop, not a substitute for reading it first.
 export const TEMPERATURE = 0;
+
+// Best-effort allowlist backstop for the risk above. Not an authoritative
+// capability check (Anthropic doesn't expose one) — a false negative here
+// only produces a loud server-log warning, never a thrown error, since an
+// unmaintained allowlist shouldn't break the endpoint on its own.
+const KNOWN_TEMPERATURE_SAFE_MODELS = ["claude-haiku-4-5"];
+
+export function warnIfTemperatureUnsafe(model: string): void {
+  if (!KNOWN_TEMPERATURE_SAFE_MODELS.some((safe) => model.includes(safe))) {
+    console.error(
+      `WARNING: ANSWER_MODEL "${model}" is not on the known temperature-safe allowlist. ` +
+        `If this model was released after Claude Opus 4.6, generation will fail with a 400. ` +
+        `See docs/superpowers/specs/2026-07-20-generation-grounding-gap-design.md §6.`,
+    );
+  }
+}
 ```
 
 Replace the current `SYSTEM_PROMPT` (currently lines 9-16) with:
@@ -176,11 +218,14 @@ export async function* streamAnswer(
 ```
 
 Add `temperature,` to the `client.messages.stream({...})` call (currently
-lines 44-53), right after `max_tokens: MAX_ANSWER_TOKENS,`:
+lines 44-53), right after `max_tokens: MAX_ANSWER_TOKENS,`, and call
+`warnIfTemperatureUnsafe` right before it:
 
 ```ts
+  const model = ANSWER_MODEL();
+  warnIfTemperatureUnsafe(model);
   const stream = client.messages.stream({
-    model: ANSWER_MODEL(),
+    model,
     max_tokens: MAX_ANSWER_TOKENS,
     temperature,
     system: SYSTEM_PROMPT,
@@ -192,22 +237,49 @@ lines 44-53), right after `max_tokens: MAX_ANSWER_TOKENS,`:
   });
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 4: Document the risk where the actual risk-triggering action would see it**
+
+A code comment in `lib/answer.ts` is invisible to whoever changes the
+`ANTHROPIC_MODEL` Railway env var — they never open that file. Update
+`CLAUDE.md`'s Secrets section so the warning is where that person would
+actually look. Current text (lines 79-82):
+
+```markdown
+**Production** (Railway env vars): all of the above, plus `ANTHROPIC_API_KEY` (required for
+answer generation), `ANTHROPIC_MODEL` (optional; defaults to `claude-haiku-4-5` if
+unset), `DEMO_PASSWORD` (required; protect the public `/api/ask` route with a simple password —
+must be 32+ random chars in production), `SESSION_SECRET` (required; a long random string for signing session cookies).
+```
+
+Replace with:
+
+```markdown
+**Production** (Railway env vars): all of the above, plus `ANTHROPIC_API_KEY` (required for
+answer generation), `ANTHROPIC_MODEL` (optional; defaults to `claude-haiku-4-5` if
+unset — **before changing this to a newer model generation, re-verify that `temperature: 0`
+in `lib/answer.ts` still works live; the Anthropic SDK deprecates `temperature` for models
+released after Claude Opus 4.6 and rejects a non-1.0 value with a 400, which would break
+answer generation entirely — see `docs/superpowers/specs/2026-07-20-generation-grounding-gap-design.md` §6**),
+`DEMO_PASSWORD` (required; protect the public `/api/ask` route with a simple password —
+must be 32+ random chars in production), `SESSION_SECRET` (required; a long random string for signing session cookies).
+```
+
+- [ ] **Step 5: Run tests to verify they pass**
 
 Run: `npx vitest run tests/answer.test.ts`
 Expected: PASS, all tests including the pre-existing ones (nothing about
 the existing `documentBlocks` or `streamAnswer` behavior changed except
 adding a 4th parameter with a default that preserves old call sites).
 
-- [ ] **Step 5: Type-check**
+- [ ] **Step 6: Type-check**
 
 Run: `npx tsc --noEmit`
 Expected: no errors.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add lib/answer.ts tests/answer.test.ts
+git add lib/answer.ts tests/answer.test.ts CLAUDE.md
 git commit -m "feat: temperature control, hardened grounding prompt, citedBreadcrumbs (issue #65)"
 ```
 
@@ -285,10 +357,19 @@ git commit -m "feat: add real-generation eval harness (issue #65)"
 
 **Interfaces:** none — pure data file edit.
 
-Both entries below were verified against the live `chunks` table
-(Supabase project `moybkceeltzwnyiaasys`, `corpus_version = '2025-26'`)
-on 2026-07-20 — the cited breadcrumbs exist and their content supports the
-question as written.
+Both entries below were verified two ways on 2026-07-20: against the live
+`chunks` table (Supabase project `moybkceeltzwnyiaasys`,
+`corpus_version = '2025-26'` — the cited breadcrumbs exist and their
+content supports the question as written) **and** against real
+`searchChunks(question, 8)` output — both required breadcrumbs land in
+the actual top-8 for both questions today. **This second check matters
+and is easy to skip:** a breadcrumb can exist and genuinely support a
+question in the DB while still not ranking in the top-8 for reasons
+unrelated to this fix (embedding distance, corpus size) — which would
+make Task 4's `runGenerationCompletenessSet` (fixed `k=8`) report a
+permanent, unrelated false MISS. Any future compound-questions.json entry
+must be checked against real retrieval output, not just table content,
+before being added.
 
 - [ ] **Step 1: Add a comma to the current last entry**
 
@@ -542,81 +623,68 @@ git commit -m "feat: add --generation mode to eval harness (completeness + hedge
 
 **Interfaces:** none — pure data file, consumed by Task 4's `runHedgeSet`.
 
-- [ ] **Step 1: Seed with the original, already-proven reproduction question**
+- [ ] **Step 1: Write the file**
+
+Investigation completed during this plan's authoring (2026-07-20,
+resolved a review NIT that originally deferred this to implementation
+time — same effort either way, so it was finished here instead). Four
+candidates were checked via real `searchChunks(question, 8)` output
+against the live corpus, beyond the original reproduction question:
+
+- *"If the ball deflects off a defender and falls to an attacking player
+  in an offside position, does that cancel the offside?"* — **dead end**,
+  `Law 11 › 2` already explicitly distinguishes deflection/rebound from
+  deliberate play.
+- *"If a player throws the ball into their own goal directly from a
+  throw-in, does the goal count?"* — **dead end**, `Law 15 › Introduction`
+  already explicitly states "if the ball enters the thrower's goal – a
+  corner kick is awarded."
+- *"If the ball touches a defender's arm and goes out for a corner kick
+  instead of resulting in a goal, is that still a handball offence even
+  though no goal was scored?"* — **dead end**, `Law 12 › 1`'s general
+  handball offence list ("deliberately touches the ball with their
+  hand/arm...") applies regardless of whether a goal resulted; confirmed
+  as the top retrieval hit (similarity 0.611).
+- *"If a goalkeeper's own hand or arm accidentally deflects the ball into
+  their own team's goal, does that own goal count, or is it disallowed
+  the same way a handball goal against the opponents would be?"* —
+  **genuine hit.** `Law 12 › 1` is the top retrieval hit (similarity
+  0.667) and explicitly covers a goalkeeper scoring *in the opponents'
+  goal* off their own hand/arm ("scores in the opponents' goal: directly
+  from their hand/arm, even if accidental, including by the goalkeeper")
+  — but never addresses the reverse: a goalkeeper's hand/arm deflecting
+  the ball into their *own* goal. Same shape as the original bug (a rule
+  stated for one specific configuration, asked about a different one).
+
+Write `evals/hedge-questions.json`:
 
 ```json
 [
   {
     "question": "If a player shoots a shot and it bounces off the arm of an opponent, but eventually gets a goal - Should the goal be disallowed and be considered a penalty or should the goal count?",
     "note": "Original issue #65 reproduction question. Retrieved Law 12 › 1 handball text governs a player's OWN hand/arm when scoring — it does not address an opponent's/defender's arm deflecting the ball into the goal. Correct behavior: hedge. Confirmed nondeterministic pre-fix (2026-07-19): one run hedged correctly, an identical retry asserted an unsupported ruling."
+  },
+  {
+    "question": "If a goalkeeper's own hand or arm accidentally deflects the ball into their own team's goal, does that own goal count, or is it disallowed the same way a handball goal against the opponents would be?",
+    "note": "New for issue #65's generation-grounding fix, verified 2026-07-20. Law 12 › 1 is the top retrieval hit (similarity 0.667) and explicitly covers a goalkeeper scoring in the OPPONENTS' goal off their own hand/arm, but never addresses the reverse case of a deflection into their OWN goal. Correct behavior: hedge, not assert a specific ruling."
   }
 ]
 ```
 
-This one entry alone already directly tests the exact regression issue
-#65 reports — everything past this step is coverage expansion, not a
-requirement for the fix's correctness.
-
-- [ ] **Step 2: Bounded investigation for additional genuine gaps**
-
-Two candidates were already checked during this plan's authoring
-(2026-07-20) and found NOT usable — both retrieved passages that
-explicitly cover the exact scenario, so they don't create the ambiguity a
-hedge test needs:
-
-- *"If the ball deflects off a defender and falls to an attacking player
-  in an offside position, does that cancel the offside?"* — `Law 11 › 2`
-  already explicitly distinguishes deflection/rebound from deliberate
-  play. Well covered.
-- *"If a player throws the ball into their own goal directly from a
-  throw-in, does the goal count?"* — `Law 15 › Introduction` already
-  explicitly states "if the ball enters the thrower's goal – a corner
-  kick is awarded." Well covered.
-
-Try up to 3 more candidates using the same pattern as the original bug —
-a rule stated for one specific actor that the model might misapply to a
-different actor. Two untested starting candidates:
-
-- *"If the ball touches a defender's arm and goes out for a corner kick
-  instead of resulting in a goal, is that still a handball offence even
-  though no goal was scored?"*
-- *"Does the goalkeeper's own-hand/arm scoring restriction apply the same
-  way if the goalkeeper is the one who concedes an own goal off their own
-  arm, versus scoring in the opponents' goal?"*
-
-For each candidate (the two above, plus any you invent following the same
-pattern): run `searchChunks(question, 8)` from `lib/retrieval.ts`
-directly (a throwaway script is fine, same pattern as issue #64's
-dry-run scripts — write it, run it, delete it, confirm `git status` is
-clean of it afterward) and read the actual retrieved passage content. A
-candidate is a genuine hit only if the retrieved passages are topically
-related (same law / general topic) but do **not** explicitly state a
-ruling for the exact scenario asked. If a candidate turns out to be well
-covered (like the two dead ends above), discard it and try the next one.
-
-Add any genuine hits found (in the same `{ "question", "note" }` shape as
-Step 1, with the note explaining what's retrieved and why it doesn't
-cover the exact scenario) to `evals/hedge-questions.json`.
-
-**If none of the 3 additional attempts produce a genuine gap:** that is
-an acceptable, documented outcome — do not keep searching past this
-budget. Note in your task report which candidates were tried and why each
-didn't qualify. Shipping with just the one proven question from Step 1 is
-sufficient; per spec §3, this app's corpus being this thorough is a
-finding worth recording, not a gap to force.
-
-- [ ] **Step 3: Validate JSON**
+- [ ] **Step 2: Validate JSON**
 
 Run: `node -e "JSON.parse(require('fs').readFileSync('evals/hedge-questions.json','utf8')); console.log('OK')"`
 Expected: `OK`.
 
-- [ ] **Step 4: Confirm no throwaway investigation scripts survived**
+- [ ] **Step 3: Confirm the working tree is otherwise clean**
 
 Run: `git status --short`
 Expected: only `evals/hedge-questions.json` (staged or modified) — no
-stray `_tmp-*.ts` files.
+stray `_tmp-*.ts` files (the investigation scripts used to check the four
+candidates above were already run and deleted during this plan's
+authoring).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add evals/hedge-questions.json
@@ -659,8 +727,8 @@ prompt change regressed something the fix wasn't supposed to touch.
 
 Run: `npm run eval -- --generation --repeat=5`
 
-Expected: the (one or more) hedge questions each print 5 answers. Read
-all 5 for each question — the fix is working if every run hedges
+Expected: both hedge questions each print 5 answers. Read all 5 for each
+question — the fix is working if every run hedges
 consistently. This is the direct test of the nondeterminism this issue
 reports: the same question, run repeatedly, should no longer sometimes
 hedge and sometimes assert a ruling.
@@ -706,23 +774,26 @@ git commit -m "docs: record post-fix generation-grounding verification results (
   data (Task 3), completeness + hedge check wiring including the
   temperature-comparison flag from §4.2.7 (Task 4), hedge question set
   (Task 5), full verification + results recording (Task 6). The
-  temperature-deprecation risk from spec §6 is addressed directly in
-  Task 1's code comment.
+  temperature-deprecation risk from spec §6 is addressed in Task 1 via a
+  CLAUDE.md doc update plus a runtime allowlist warning, not just a code
+  comment (see revision history — this was a real BLOCKER caught by
+  review, not an original design choice).
 - **No placeholders:** every step has literal code, exact file
   paths/line targets, exact commands, and exact expected output. Task 5's
-  "investigation" step is bounded (try up to 3 more candidates, two
-  starting candidates given, explicit stop condition) rather than
-  open-ended, and its two already-tried dead ends are documented so the
-  implementer doesn't repeat that work.
-- **Type consistency:** `citedBreadcrumbs`, `TEMPERATURE`, and
-  `streamAnswer`'s 4th `temperature` parameter (Task 1) are the exact
-  names Task 2's `runGeneration` imports and uses. `GenerationResult`'s
-  `citedBreadcrumbs` field (Task 2) is the exact name Task 4's
-  `runGenerationCompletenessSet` destructures. `HedgeQuestion` (Task 4)
-  matches the exact shape Task 5's JSON file produces.
+  hedge-question investigation was completed during authoring (not
+  deferred) — both dead ends and the one genuine additional gap found are
+  documented with real, verified retrieval evidence.
+- **Type consistency:** `citedBreadcrumbs`, `TEMPERATURE`,
+  `warnIfTemperatureUnsafe`, and `streamAnswer`'s 4th `temperature`
+  parameter (Task 1) are the exact names Task 2's `runGeneration` imports
+  and uses. `GenerationResult`'s `citedBreadcrumbs` field (Task 2) is the
+  exact name Task 4's `runGenerationCompletenessSet` destructures.
+  `HedgeQuestion` (Task 4) matches the exact shape Task 5's JSON file
+  produces.
 
 ## Revision history
 
 | Date | Change |
 |---|---|
 | 2026-07-20 | Initial plan. |
+| 2026-07-20 | Fable review (PR #73, fresh dispatch): confirmed root-cause analysis, chosen fix, and all plan code/file-line references accurate against `main` and the live corpus — found 1 BLOCKER (the temperature-deprecation mitigation was a code comment in a file the actual risk-triggering action, a Railway `ANTHROPIC_MODEL` env var change, would never touch) and 3 SUGGESTIONs. Fixed: Task 1 now updates CLAUDE.md's `ANTHROPIC_MODEL` doc directly and adds a runtime `warnIfTemperatureUnsafe` allowlist check (with tests), replacing the comment-only mitigation; corrected the spec's inaccurate "silently coerced" claim (this app's `temperature: 0` only hits the loud-400 path, not silent coercion); Task 3 now documents that both new compound-questions.json entries were verified against real `searchChunks` output, not just DB content, and states this as a requirement for future entries; Task 5's previously-deferred hedge-question investigation was completed now instead (same effort, no reason to defer) — found one additional genuine gap (goalkeeper own-goal-via-handball) alongside a third confirmed dead end, so `evals/hedge-questions.json` now ships with 2 verified questions instead of 1. |
