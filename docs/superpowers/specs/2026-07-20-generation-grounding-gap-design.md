@@ -245,6 +245,21 @@ and completeness rather than relying on the theoretical argument in
 - Temperature 0 is expected to make the observed failure rare, not
   impossible (§4.2.1) — §5's repeated-run testing measures the actual
   improvement rather than assuming a guarantee.
+- **`temperature` is a deprecated parameter for newer model generations.**
+  The installed SDK (`@anthropic-ai/sdk@0.110.0`) documents that "Models
+  released after Claude Opus 4.6 do not support setting temperature. A
+  value of 1.0 will be accepted for backwards compatibility, all other
+  values will be rejected with a 400 error." Verified empirically against
+  the live API (2026-07-20): `temperature: 0` succeeds against
+  `claude-haiku-4-5`, this app's actual model — the deprecation does not
+  bite today. But `ANSWER_MODEL` in `lib/answer.ts` is deliberately
+  env-swappable ("one line to trade up to Sonnet/Opus," per its own code
+  comment) — if `ANTHROPIC_MODEL` is ever pointed at a model released
+  after the deprecation cutoff, `temperature: 0` would start being
+  silently coerced to 1.0 or rejected outright with a 400, defeating this
+  entire fix without any code change to flag it. The implementation plan
+  should add a guard or at least a code comment at the `temperature: 0`
+  call site warning future maintainers of this specific model-swap risk.
 
 ## Provenance
 
