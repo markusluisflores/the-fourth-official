@@ -78,7 +78,14 @@ Global Constraints.
 
 **Production** (Railway env vars): all of the above, plus `ANTHROPIC_API_KEY` (required for
 answer generation), `ANTHROPIC_MODEL` (optional; defaults to `claude-haiku-4-5` if
-unset), `DEMO_PASSWORD` (required; protect the public `/api/ask` route with a simple password —
+unset — **before changing this to a newer model generation, re-verify that `temperature: 0`
+in `lib/answer.ts` still works live; the Anthropic SDK deprecates `temperature` for models
+released after Claude Opus 4.6 and rejects a non-1.0 value with a 400, which would break
+answer generation entirely — see `docs/superpowers/specs/2026-07-20-generation-grounding-gap-design.md` §6.
+Once verified safe, also add the new model name to `KNOWN_TEMPERATURE_SAFE_MODELS` in
+`lib/answer.ts`, or `warnIfTemperatureUnsafe` will log a false-alarm warning on every request
+even though the swap is fine**),
+`DEMO_PASSWORD` (required; protect the public `/api/ask` route with a simple password —
 must be 32+ random chars in production), `SESSION_SECRET` (required; a long random string for signing session cookies).
 
 All secrets: never in code, prompts, or commits. `.env.local.example` documents the required keys

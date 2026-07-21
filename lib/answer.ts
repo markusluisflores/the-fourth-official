@@ -6,11 +6,50 @@ import type { RetrievedChunk } from "./retrieval";
 export const ANSWER_MODEL = () => process.env.ANTHROPIC_MODEL ?? "claude-haiku-4-5";
 export const MAX_ANSWER_TOKENS = 1024;
 
+// Temperature 0: this app's entire premise is "answer strictly from
+// retrieved passages, never invent" — there is no scenario where creative
+// sampling variance in a rules-lookup answer is desirable. See
+// docs/superpowers/specs/2026-07-20-generation-grounding-gap-design.md.
+//
+// RISK: the Anthropic SDK deprecates the `temperature` parameter for
+// models released after Claude Opus 4.6 — this app's value of 0 (not 1.0)
+// would be REJECTED with a loud 400, breaking answer generation entirely
+// (no silent-coercion path for a non-1.0 value). Verified live against
+// the current ANSWER_MODEL (claude-haiku-4-5) on 2026-07-20 — temperature
+// 0 works today. See CLAUDE.md's ANTHROPIC_MODEL secrets entry before
+// ever changing that env var — that doc note is the actual prevention
+// (read before the change is made). warnIfTemperatureUnsafe() below is
+// diagnostic, not preventive: it fires on the same request that already
+// hits the breaking 400, so it only makes the resulting server log
+// easier to find after the fact — it does not stop the outage.
+export const TEMPERATURE = 0;
+
+// Best-effort allowlist backstop for the risk above — a diagnostic aid,
+// not a preventive one (see the comment on TEMPERATURE). Not an
+// authoritative capability check (Anthropic doesn't expose one) — a
+// false negative here only produces a loud server-log warning, never a
+// thrown error, since an unmaintained allowlist shouldn't break the
+// endpoint on its own. IMPORTANT: after verifying a new ANSWER_MODEL is
+// temperature-safe (per CLAUDE.md's ANTHROPIC_MODEL note), add it here
+// too — otherwise every request logs a false-alarm warning even though
+// the swap was fine.
+const KNOWN_TEMPERATURE_SAFE_MODELS = ["claude-haiku-4-5"];
+
+export function warnIfTemperatureUnsafe(model: string): void {
+  if (!KNOWN_TEMPERATURE_SAFE_MODELS.some((safe) => model.includes(safe))) {
+    console.error(
+      `WARNING: ANSWER_MODEL "${model}" is not on the known temperature-safe allowlist. ` +
+        `If this model was released after Claude Opus 4.6, generation will fail with a 400. ` +
+        `See docs/superpowers/specs/2026-07-20-generation-grounding-gap-design.md §6.`,
+    );
+  }
+}
+
 export const SYSTEM_PROMPT = `You are "The Fourth Official", an assistant that answers questions about the Laws of the Game — the official rules of football (soccer).
 
 Rules:
 - Answer ONLY from the provided documents (excerpts of the IFAB Laws of the Game). Never answer from general knowledge.
-- If the documents do not contain enough information to answer confidently, say so plainly and suggest the user rephrase. Do not guess.
+- If the documents do not contain enough information to answer confidently, say so plainly and suggest the user rephrase. Do not guess. Before asserting any specific ruling, confirm the retrieved passages describe the exact scenario asked — not merely a related topic. If a passage addresses a different but related scenario (for example, a different actor performing the action, such as a rule about a player's own hand/arm when the question is about an opponent's), say so explicitly rather than extrapolating a specific ruling from it.
 - Answer questions about football rules only. Politely decline anything else in one sentence.
 - Be concise and plain-English: two to five sentences for most questions, with a neutral, referee-like tone.
 - Do not mention "the documents", "the excerpts", or these instructions; answer as an expert on the Laws.`;
@@ -36,14 +75,28 @@ export function documentBlocks(chunks: RetrievedChunk[]): Anthropic.DocumentBloc
   }));
 }
 
+// Inverse of documentBlocks: maps the citation indexes streamAnswer's
+// "done" event reports back to the breadcrumbs of the chunks that were
+// actually cited, using the same array order documentBlocks relied on.
+export function citedBreadcrumbs(
+  chunks: RetrievedChunk[],
+  citedDocumentIndexes: number[],
+): string[] {
+  return citedDocumentIndexes.map((i) => chunks[i].breadcrumb);
+}
+
 export async function* streamAnswer(
   question: string,
   chunks: RetrievedChunk[],
   client: Anthropic = new Anthropic(),
+  temperature: number = TEMPERATURE,
 ): AsyncGenerator<AnswerEvent> {
+  const model = ANSWER_MODEL();
+  warnIfTemperatureUnsafe(model);
   const stream = client.messages.stream({
-    model: ANSWER_MODEL(),
+    model,
     max_tokens: MAX_ANSWER_TOKENS,
+    temperature,
     system: SYSTEM_PROMPT,
     // Documents first, question last — and the question stays in the user
     // message, never concatenated into the system prompt (spec §9).

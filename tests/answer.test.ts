@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type Anthropic from "@anthropic-ai/sdk";
-import { documentBlocks, streamAnswer, type AnswerEvent } from "../lib/answer";
+import {
+  citedBreadcrumbs,
+  documentBlocks,
+  streamAnswer,
+  warnIfTemperatureUnsafe,
+  type AnswerEvent,
+} from "../lib/answer";
 import type { RetrievedChunk } from "../lib/retrieval";
 
 const chunk = (id: number, breadcrumb: string): RetrievedChunk => ({
@@ -27,6 +33,36 @@ describe("documentBlocks", () => {
         citations: { enabled: true },
       },
     ]);
+  });
+});
+
+describe("citedBreadcrumbs", () => {
+  it("maps cited document indexes back to their chunk breadcrumbs", () => {
+    const chunks = [chunk(1, "Law 11 › 1. Offside position"), chunk(2, "Law 15 › 1. Procedure")];
+    expect(citedBreadcrumbs(chunks, [1, 0])).toEqual([
+      "Law 15 › 1. Procedure",
+      "Law 11 › 1. Offside position",
+    ]);
+  });
+
+  it("returns an empty array when nothing was cited", () => {
+    expect(citedBreadcrumbs([chunk(1, "Law 11 › 1. Offside position")], [])).toEqual([]);
+  });
+});
+
+describe("warnIfTemperatureUnsafe", () => {
+  it("does not warn for a known temperature-safe model", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    warnIfTemperatureUnsafe("claude-haiku-4-5");
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("warns for a model not on the known-safe allowlist", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    warnIfTemperatureUnsafe("claude-opus-9-hypothetical");
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("claude-opus-9-hypothetical"));
+    spy.mockRestore();
   });
 });
 
@@ -150,5 +186,19 @@ describe("streamAnswer", () => {
     const client = { messages: { stream: () => finite } } as unknown as Anthropic;
     await collect(streamAnswer("q", chunks, client));
     expect(abort).not.toHaveBeenCalled();
+  });
+
+  it("passes temperature 0 to the underlying API call by default", async () => {
+    const stream = vi.fn(() => fakeStream([], "end_turn"));
+    const client = { messages: { stream } } as unknown as Anthropic;
+    await collect(streamAnswer("q", chunks, client));
+    expect(stream).toHaveBeenCalledWith(expect.objectContaining({ temperature: 0 }));
+  });
+
+  it("passes a temperature override through to the underlying API call", async () => {
+    const stream = vi.fn(() => fakeStream([], "end_turn"));
+    const client = { messages: { stream } } as unknown as Anthropic;
+    await collect(streamAnswer("q", chunks, client, 1));
+    expect(stream).toHaveBeenCalledWith(expect.objectContaining({ temperature: 1 }));
   });
 });
