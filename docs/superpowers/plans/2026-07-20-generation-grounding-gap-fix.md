@@ -534,11 +534,24 @@ correct.
 
 - [ ] **Step 1: Write the failing tests for the two pure argv parsers**
 
+Update the existing import line at the top of `tests/evals.test.ts`
+(currently `import { coverageScore, matchesExpected, scoreQuestion } from "../evals/run-evals";`)
+to add the two new names to the same import — do not add a second,
+separate import line from the same module:
+
+```ts
+import {
+  coverageScore,
+  matchesExpected,
+  parseRepeatArg,
+  parseTemperatureArg,
+  scoreQuestion,
+} from "../evals/run-evals";
+```
+
 Add to `tests/evals.test.ts`:
 
 ```ts
-import { parseRepeatArg, parseTemperatureArg } from "../evals/run-evals";
-
 describe("parseTemperatureArg", () => {
   it("defaults to TEMPERATURE (0) when --temperature is absent", () => {
     expect(parseTemperatureArg(["node", "run-evals.ts", "--generation"])).toBe(0);
@@ -833,10 +846,10 @@ rest of the eval suite.
 
 Run: `npm run eval -- --generation`
 
-Expected: golden and paraphrase sets show `full: N/N` (every question's
+Expected: golden and paraphrase sets show `cited: N/N` (every question's
 single required breadcrumb was cited) or close to it — read the actual
-output, don't assume. Compound set (16 questions after Task 3) shows a
-completeness rate; the two new Task 3 entries are the ones to check most
+output, don't assume. Compound set (16 questions after Task 3) shows
+`full: N/N`; the two new Task 3 entries are the ones to check most
 closely since they're unverified at the generation layer until now.
 Hedge set prints one full answer per question for manual review — read
 it and judge: did it hedge, or assert a specific unsupported ruling?
@@ -845,6 +858,15 @@ it and judge: did it hedge, or assert a specific unsupported ruling?
 (a single-citation question that used to work now not being cited): stop
 and investigate before proceeding — this would mean temperature 0 or the
 prompt change regressed something the fix wasn't supposed to touch.
+
+**If the compound completeness check shows a regression** (a required
+breadcrumb that Task 3 confirmed lands in the real top-8 retrieval is
+still not being cited in the generated answer): stop and investigate
+before proceeding, same as the golden/paraphrase gate above — per spec
+§5, an unresolved compound regression is not shippable, this is a real
+stop-gate, not just something to "check closely." Do not let this
+verification step's own finding become a footnote carried forward
+instead of resolved.
 
 - [ ] **Step 2: Repeated-run hedge check at temperature 0**
 
@@ -924,3 +946,4 @@ git commit -m "docs: record post-fix generation-grounding verification results (
 | 2026-07-20 | Initial plan. |
 | 2026-07-20 | Fable review (PR #73, fresh dispatch): confirmed root-cause analysis, chosen fix, and all plan code/file-line references accurate against `main` and the live corpus — found 1 BLOCKER (the temperature-deprecation mitigation was a code comment in a file the actual risk-triggering action, a Railway `ANTHROPIC_MODEL` env var change, would never touch) and 3 SUGGESTIONs. Fixed: Task 1 now updates CLAUDE.md's `ANTHROPIC_MODEL` doc directly and adds a runtime `warnIfTemperatureUnsafe` allowlist check (with tests), replacing the comment-only mitigation; corrected the spec's inaccurate "silently coerced" claim (this app's `temperature: 0` only hits the loud-400 path, not silent coercion); Task 3 now documents that both new compound-questions.json entries were verified against real `searchChunks` output, not just DB content, and states this as a requirement for future entries; Task 5's previously-deferred hedge-question investigation was completed now instead (same effort, no reason to defer) — found one additional genuine gap (goalkeeper own-goal-via-handball) alongside a third confirmed dead end, so `evals/hedge-questions.json` now ships with 2 verified questions instead of 1. |
 | 2026-07-20 | Resumed-thread verification: confirmed all 4 fixes above resolved (re-ran `searchChunks`, re-checked CLAUDE.md placement, re-traced code and tests by hand). **Independent fresh Fable review** (no prior context, told not to defer to earlier comments) on the resulting diff found a NEW BLOCKER neither prior round had caught: Task 2's `generation-harness.ts` called `searchChunks` directly, bypassing `run-evals.ts`'s existing `withVoyageRetry` backoff wrapper — live-confirmed this crashes with a Voyage 429 after 3 sequential calls, meaning Task 6's own mandated ~56-call verification run would abort partway through every time. Plus 3 SUGGESTIONs and 1 NIT. Fixed: extracted the shared retry wrapper to a new `evals/voyage-retry.ts` (avoiding a circular import between `generation-harness.ts` and `run-evals.ts`), refactored `run-evals.ts` to import it instead of defining it locally; split the single `runGenerationCompletenessSet` into `runGenerationGoldenSet` (OR-semantics, matching `Golden.expected`'s existing design) and `runGenerationCompoundSet` (AND-semantics, matching `CompoundQuestion.required`) — the original conflated both, which would have silently misscored any future golden question authored with legitimate OR-alternatives; clarified in both the spec and Task 1's code comments that `warnIfTemperatureUnsafe` is a diagnostic aid (makes the outage easier to find in logs) not a preventive one (the CLAUDE.md doc note is the actual prevention); corrected spec §5's stale "42 total" golden+paraphrase count to note it depends on whether PR #72 has merged; fixed an imprecise "top retrieval hit" claim for the goalkeeper hedge question (highest similarity, but ranked 4th in the actual fused top-8 — doesn't change the finding, just the wording). This is a third data point (after PR #69, #70, and this same PR #73's own first round) for the still-open fresh-vs-resumed review policy question: the resumed thread did real, additional verification work each time, but the independent fresh round again surfaced a materially different, non-overlapping, and this time more severe class of finding (a live-reproducible crash in the plan's own required verification step) than either the original or resumed rounds caught. |
+| 2026-07-20 | **Third independent fresh Fable review** (no prior-thread context, told not to defer to earlier comments): live-verified every code line reference, traced the full data flow by hand (hedge/compound files through the harness to the Anthropic call), re-ran `searchChunks` against the live corpus for all 4 new/changed questions (including re-confirming the goalkeeper question's exact 0.667-similarity/4th-rank detail down to the decimal), grepped the installed SDK to re-confirm the temperature-deprecation quote, and independently re-triggered the same Voyage 429 the round-2 BLOCKER was about — as further live confirmation that fix was real, not just diff-level. **Found 0 BLOCKERs** — a genuinely clean pass after two real BLOCKERs in the two prior rounds. Found 1 SUGGESTION (Task 6's explicit stop-gate covered golden/paraphrase regressions but not a compound-tier regression, despite spec §5 stating compound regressions are also not shippable — fixed by adding an equivalent explicit stop-gate for the compound check) and 1 NIT (a duplicate import statement in the Task 4 test edit — fixed by merging into the existing import). Also caught and fixed a stale-wording issue found independently while applying the SUGGESTION fix: Task 6 still described golden/paraphrase output as `full: N/N`, but the OR/AND semantics split from the prior round renamed that output to `cited: N/N` for golden/paraphrase specifically. This is a fourth data point for the fresh-vs-resumed policy question, and the first of the three rounds on this PR where a fully independent read came back BLOCKER-free — some signal that the document has genuinely converged, not just that this round got lucky, given how thorough the verification was. |
