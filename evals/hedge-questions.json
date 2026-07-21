@@ -1,0 +1,10 @@
+[
+  {
+    "question": "If a player shoots a shot and it bounces off the arm of an opponent, but eventually gets a goal - Should the goal be disallowed and be considered a penalty or should the goal count?",
+    "note": "Original issue #65 reproduction question. Retrieved Law 12 › 1 handball text governs a player's OWN hand/arm when scoring — it does not address an opponent's/defender's arm deflecting the ball into the goal. Correct behavior: hedge. Confirmed nondeterministic pre-fix (2026-07-19): one run hedged correctly, an identical retry asserted an unsupported ruling."
+  },
+  {
+    "question": "If a goalkeeper's own hand or arm accidentally deflects the ball into their own team's goal, does that own goal count, or is it disallowed the same way a handball goal against the opponents would be?",
+    "note": "New for issue #65's generation-grounding fix, verified 2026-07-20. Law 12 › 1 has the highest similarity among the top-8 (0.667, ranked 4th in the fused result order) and explicitly covers a goalkeeper scoring in the OPPONENTS' goal off their own hand/arm, but never addresses the reverse case of a deflection into their OWN goal. Correct behavior: hedge, not assert a specific ruling."
+  }
+]
