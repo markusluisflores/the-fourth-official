@@ -3,6 +3,13 @@ import { searchChunks } from "../lib/retrieval";
 import { decompose } from "../lib/decompose";
 import { mergeResults, MERGED_CHUNK_CAP, searchChunksBatch } from "../lib/retrieval";
 import { withVoyageRetry } from "./voyage-retry";
+import { runGeneration } from "./generation-harness";
+import { TEMPERATURE } from "../lib/answer";
+
+interface HedgeQuestion {
+  question: string;
+  note?: string;
+}
 
 interface Golden {
   question: string;
@@ -49,6 +56,16 @@ export function coverageScore(
     coverage: required.length === 0 ? 1 : (required.length - missed.length) / required.length,
     missed,
   };
+}
+
+export function parseTemperatureArg(argv: string[]): number {
+  const arg = argv.find((a) => a.startsWith("--temperature="));
+  return arg ? Number(arg.split("=")[1]) : TEMPERATURE;
+}
+
+export function parseRepeatArg(argv: string[]): number {
+  const arg = argv.find((a) => a.startsWith("--repeat="));
+  return arg ? Number(arg.split("=")[1]) : 1;
 }
 
 const searchWithRetry = (question: string, k: number) =>
@@ -165,6 +182,71 @@ async function runCompoundSetDecomposed(compounds: CompoundQuestion[]): Promise<
   );
 }
 
+// OR-semantics (mirrors runGoldenSet's retrieval-side scoring): a hit is
+// citing ANY of the expected breadcrumbs, not all of them.
+async function runGenerationGoldenSet(
+  label: string,
+  questions: Golden[],
+  temperature: number,
+): Promise<void> {
+  let hits = 0;
+  for (const g of questions) {
+    const { citedBreadcrumbs } = await runGeneration(g.question, 8, temperature);
+    const rank = scoreQuestion(
+      citedBreadcrumbs.map((breadcrumb) => ({ breadcrumb })),
+      g.expected,
+    );
+    if (rank > 0) hits += 1;
+    console.log(`${rank > 0 ? `CITED@${rank}` : "NOT CITED"}  ${g.question}`);
+  }
+  console.log(
+    `\n[${label} — generation completeness, temperature=${temperature}] cited: ${hits}/${questions.length}`,
+  );
+}
+
+// AND-semantics (mirrors runCompoundSet's retrieval-side scoring): every
+// required breadcrumb must be cited, not just one of them.
+async function runGenerationCompoundSet(
+  compounds: CompoundQuestion[],
+  temperature: number,
+): Promise<void> {
+  let full = 0;
+  for (const c of compounds) {
+    const { citedBreadcrumbs } = await runGeneration(c.question, 8, temperature);
+    const { missed } = coverageScore(
+      citedBreadcrumbs.map((breadcrumb) => ({ breadcrumb })),
+      c.required,
+    );
+    if (missed.length === 0) full += 1;
+    console.log(
+      `${missed.length === 0 ? "FULL " : "MISS "} ${c.required.length - missed.length}/${c.required.length}  ${c.question}`,
+    );
+    if (missed.length > 0) console.log(`  not cited in answer: ${missed.join(" | ")}`);
+  }
+  console.log(
+    `\n[compound — generation completeness, temperature=${temperature}] full: ${full}/${compounds.length}`,
+  );
+}
+
+async function runHedgeSet(
+  hedges: HedgeQuestion[],
+  temperature: number,
+  repeat: number,
+): Promise<void> {
+  for (const h of hedges) {
+    console.log(`\n--- ${h.question}`);
+    if (h.note) console.log(`  (${h.note})`);
+    for (let i = 1; i <= repeat; i++) {
+      const { answerText } = await runGeneration(h.question, 8, temperature);
+      console.log(`  run ${i}/${repeat}: ${answerText}`);
+    }
+  }
+  console.log(
+    `\n[hedge set] ${hedges.length} question(s) x ${repeat} run(s) at temperature=${temperature} — ` +
+      `MANUALLY REVIEW each answer above: did it hedge (pass) or assert an unsupported specific ruling (fail)?`,
+  );
+}
+
 async function main() {
   if (process.argv.includes("--decompose")) {
     if (!process.env.ANTHROPIC_API_KEY) {
@@ -175,6 +257,40 @@ async function main() {
     );
     console.log("=== Compound set, decomposed retrieval (opt-in; paid; nondeterministic) ===");
     await runCompoundSetDecomposed(compounds);
+    return;
+  }
+
+  if (process.argv.includes("--generation")) {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      throw new Error("--generation requires ANTHROPIC_API_KEY (it calls the real answer model)");
+    }
+    const temperature = parseTemperatureArg(process.argv);
+    const repeat = parseRepeatArg(process.argv);
+    const goldens: Golden[] = JSON.parse(await readFile("evals/golden-questions.json", "utf8"));
+    const paraphrases: Golden[] = JSON.parse(
+      await readFile("evals/paraphrase-questions.json", "utf8"),
+    );
+    const compounds: CompoundQuestion[] = JSON.parse(
+      await readFile("evals/compound-questions.json", "utf8"),
+    );
+    const hedges: HedgeQuestion[] = JSON.parse(
+      await readFile("evals/hedge-questions.json", "utf8"),
+    );
+
+    console.log(
+      `=== Generation-level checks (temperature=${temperature}; calls the real Anthropic model — not free) ===`,
+    );
+    console.log("\n=== Golden set — generation completeness (OR-semantics) ===");
+    await runGenerationGoldenSet("golden", goldens, temperature);
+
+    console.log("\n=== Paraphrase set — generation completeness (OR-semantics) ===");
+    await runGenerationGoldenSet("paraphrase", paraphrases, temperature);
+
+    console.log("\n=== Compound set — generation completeness (AND-semantics) ===");
+    await runGenerationCompoundSet(compounds, temperature);
+
+    console.log("\n=== Hedge set — MANUAL REVIEW REQUIRED (not automated pass/fail) ===");
+    await runHedgeSet(hedges, temperature, repeat);
     return;
   }
 

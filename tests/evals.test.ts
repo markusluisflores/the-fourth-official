@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { coverageScore, matchesExpected, scoreQuestion } from "../evals/run-evals";
+import {
+  coverageScore,
+  matchesExpected,
+  parseRepeatArg,
+  parseTemperatureArg,
+  scoreQuestion,
+} from "../evals/run-evals";
 
 const crumbs = (...b: string[]) => b.map((breadcrumb) => ({ breadcrumb }));
 
@@ -89,5 +95,27 @@ describe("coverageScore", () => {
 
   it("misses everything when there are no chunks", () => {
     expect(coverageScore([], ["Law 3 › 1"])).toEqual({ coverage: 0, missed: ["Law 3 › 1"] });
+  });
+});
+
+describe("parseTemperatureArg", () => {
+  it("defaults to TEMPERATURE (0) when --temperature is absent", () => {
+    expect(parseTemperatureArg(["node", "run-evals.ts", "--generation"])).toBe(0);
+  });
+
+  it("parses an explicit --temperature=N value", () => {
+    expect(parseTemperatureArg(["node", "run-evals.ts", "--generation", "--temperature=1"])).toBe(
+      1,
+    );
+  });
+});
+
+describe("parseRepeatArg", () => {
+  it("defaults to 1 when --repeat is absent", () => {
+    expect(parseRepeatArg(["node", "run-evals.ts"])).toBe(1);
+  });
+
+  it("parses an explicit --repeat=N value", () => {
+    expect(parseRepeatArg(["node", "run-evals.ts", "--repeat=5"])).toBe(5);
   });
 });
