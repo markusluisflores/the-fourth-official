@@ -9,6 +9,11 @@ import { TEMPERATURE } from "../lib/answer";
 interface HedgeQuestion {
   question: string;
   note?: string;
+  // Defaults to "hedge" when omitted — every entry before the same-player
+  // control question (added 2026-07-21/22) expects a hedge, so omitting
+  // this field keeps those entries unchanged. "rule" marks the opposite
+  // branch: a confident ruling is correct and hedging would be the failure.
+  expect?: "hedge" | "rule";
 }
 
 interface Golden {
@@ -234,7 +239,8 @@ async function runHedgeSet(
   repeat: number,
 ): Promise<void> {
   for (const h of hedges) {
-    console.log(`\n--- ${h.question}`);
+    const expect = h.expect ?? "hedge";
+    console.log(`\n--- [expect: ${expect.toUpperCase()}] ${h.question}`);
     if (h.note) console.log(`  (${h.note})`);
     for (let i = 1; i <= repeat; i++) {
       const { answerText } = await runGeneration(h.question, 8, temperature);
@@ -243,7 +249,9 @@ async function runHedgeSet(
   }
   console.log(
     `\n[hedge set] ${hedges.length} question(s) x ${repeat} run(s) at temperature=${temperature} — ` +
-      `MANUALLY REVIEW each answer above: did it hedge (pass) or assert an unsupported specific ruling (fail)?`,
+      `MANUALLY REVIEW each answer above against its own [expect: ...] tag: entries tagged HEDGE pass ` +
+      `if the model declines to give a specific ruling; entries tagged RULE pass if it confidently rules ` +
+      `(hedging on a RULE entry is a failure, the opposite of every other entry).`,
   );
 }
 

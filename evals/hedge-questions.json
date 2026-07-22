@@ -21,6 +21,7 @@
   },
   {
     "question": "A player deliberately controls the ball with their hand and then immediately scores with the same touch. Does the goal count?",
+    "expect": "rule",
     "note": "Added 2026-07-21/22. SAME-PLAYER control question — the opposite branch from every other entry in this file. Expected behavior is a confident RULING (\"disallowed\"), NOT a hedge — flag this entry specifically if a future run ever sees it hedge instead, since that would mean the fix started over-hedging the case it's still supposed to rule on confidently. Verified 3/3 correct (confident \"disallowed\" ruling, no hedge) against the final §4.2.2.2 wording."
   },
   {
