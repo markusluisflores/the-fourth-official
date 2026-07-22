@@ -202,14 +202,14 @@ verified fact as a standing rule, the same way the prompt already states
 "answer football questions only" as a flat instruction rather than
 something to reason toward:
 
-> "The handball rule that disallows a goal scored 'from' or 'immediately
-> after' a hand/arm touch applies ONLY when the SAME player who touched
+> The handball rule that disallows a goal scored "from" or "immediately
+> after" a hand/arm touch applies ONLY when the SAME player who touched
 > the ball with their hand/arm is also the one who scores. It does NOT
 > apply when a different player's hand/arm was involved (for example, a
 > defender's or goalkeeper's accidental touch before a different player's
 > shot goes in) — the documents do not state a ruling for that
 > different-player scenario, so say so plainly instead of applying the
-> same-player rule to it."
+> same-player rule to it.
 
 Verified live (2026-07-21), replacing the prior instruction's second bullet
 with this one:
@@ -234,19 +234,37 @@ that would need its own investigation and its own targeted fact, following
 this same method, not a broader "always trace referents" instruction,
 which this investigation showed actively backfires.
 
+**Known residual risk (2026-07-21, PR #76 round 2 — flagged by fresh Fable
+review):** the new instruction states as a flat fact that "the documents
+do not state a ruling" for the different-player scenario. This was true
+for every retrieval this instruction was actually tested against (the
+hedge question's real top-8 never surfaced anything beyond the Law 12 § 1
+handball text across ~15 live runs this session), but it is not a
+provably universal claim — the corpus does contain a general advantage
+clause (`Law 5 › 3`, "allows play to continue when an offence occurs and
+the non-offending team will benefit from the advantage") that is
+topically adjacent and could, in principle, be retrieved alongside the
+handball chunks for a differently-phrased version of this question. If
+that ever happens, the instruction's absolute wording could cause an
+incorrect hedge instead of engaging with genuinely relevant retrieved
+text. Not fixed here — same proportionality reasoning as the rest of this
+narrow, verified-against-observed-behavior fix: revisit if it's ever
+actually observed, not preemptively engineered against a retrieval
+combination that hasn't happened.
+
 **Final instruction** (`SYSTEM_PROMPT`, `lib/answer.ts` — second bullet,
 replacing what Task 1 originally shipped):
 
-> "If the documents do not contain enough information to answer
+> If the documents do not contain enough information to answer
 > confidently, say so plainly and suggest the user rephrase. Do not
-> guess. The handball rule that disallows a goal scored 'from' or
-> 'immediately after' a hand/arm touch applies ONLY when the SAME player
+> guess. The handball rule that disallows a goal scored "from" or
+> "immediately after" a hand/arm touch applies ONLY when the SAME player
 > who touched the ball with their hand/arm is also the one who scores. It
 > does NOT apply when a different player's hand/arm was involved (for
 > example, a defender's or goalkeeper's accidental touch before a
 > different player's shot goes in) — the documents do not state a ruling
 > for that different-player scenario, so say so plainly instead of
-> applying the same-player rule to it."
+> applying the same-player rule to it.
 
 #### 4.2.3 Generation-level verification harness (new)
 

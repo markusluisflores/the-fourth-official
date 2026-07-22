@@ -982,33 +982,72 @@ git add lib/answer.ts
 git commit -m "fix(generation): use targeted handball-scope fact instead of general scenario-matching instruction (issue #65)"
 ```
 
-- [ ] **Step 5: Re-run Task 6's hedge verification**
+- [ ] **Step 5: Re-run Task 6's full verification, not just the hedge set**
 
 Run: `npm run eval -- --generation --repeat=5`
 
-Expected: both hedge questions show 5/5 correct hedges — specifically,
-the original bug reproduction question ("If a player shoots a shot and
-it bounces off the arm of an opponent...") must no longer assert "the
-goal should be disallowed" or any other specific ruling on any of the 5
-runs. This is the actual acceptance bar for this task and for issue #65
-as a whole — golden/paraphrase/compound completeness were already
-confirmed unaffected by the prompt-wording change during the docs-branch
-investigation (3 spot-check golden questions, including another handball
-question, showed no regression), so this step's focus is specifically
-the hedge set.
+This command's output covers golden, paraphrase, and compound completeness
+too, not only the hedge set — read all of it, not just the hedge section.
 
-**If any run still asserts an unsupported ruling:** this would mean the
-live-verified fix from the docs-branch investigation doesn't reproduce
-in the full pipeline context — stop and escalate rather than iterating
-further prompt wording ad hoc, same discipline as Task 6's original
-stop-gates.
+**Correction (2026-07-21, PR #76 round 2 — flagged by fresh Fable review):**
+the docs-branch investigation only spot-checked 3 golden questions before
+proposing this wording — it never touched paraphrase or compound at all,
+and never ran against the real committed code (only throwaway diagnostic
+scripts against the candidate wording in isolation). Do not treat
+completeness as "already confirmed" — this step is the first real check
+of the new wording against the full suite on the actual branch.
 
-- [ ] **Step 6: Record the result in the spec's revision history**
+**Baseline to compare against — the real, actually-observed numbers from
+running Task 6 Steps 1-3 live on 2026-07-21 with the *original* Task 1
+wording** (Task 6's own Steps 4-5, recording these and committing, were
+never completed before this finding interrupted the work — this step's
+recording, below, covers both the original baseline and the revised
+result together, since re-deriving the baseline from scratch would waste
+the real data already gathered):
+
+| Set | Original wording, `temperature: 0`, 5x repeat |
+|---|---|
+| Golden | 32/32 cited |
+| Paraphrase | 10/10 cited |
+| Compound | 2/16 full |
+| Hedge Q1 (original bug reproduction) | 0/5 correct (5/5 asserted an unsupported ruling) |
+| Hedge Q2 (goalkeeper own-goal) | 5/5 correct |
+
+(For reference, also measured at `temperature: 1` with the same original
+wording: compound 2/16 full, hedge Q1 0/5 correct, hedge Q2 5/5 correct —
+recorded in issue #75 and this spec's revision history as the evidence
+that temperature wasn't the driver of either gap.)
+
+Expected with the *revised* wording (this step's actual run):
+- **Hedge set:** both questions show 5/5 correct hedges — specifically,
+  the original bug reproduction question ("If a player shoots a shot and
+  it bounces off the arm of an opponent...") must no longer assert "the
+  goal should be disallowed" or any other specific ruling on any of the 5
+  runs. This is the core acceptance bar for issue #65.
+- **Golden/paraphrase:** should stay at 32/32 and 10/10 — any drop is a
+  real regression from the wording change and is this step's stop-gate,
+  same as Task 6's original golden/paraphrase gate.
+- **Compound:** record whatever the real number is. A small change (e.g.
+  1-3/16) is expected to be sample noise, not a systematic effect — the
+  original-wording baseline itself already varied between 1/16 and 2/16
+  across temperature settings with no wording change at all (see table
+  above and issue #75). Flag it only if it looks like a real, large,
+  systematic drop, not ordinary variance.
+
+**If any hedge run still asserts an unsupported ruling, or golden/paraphrase
+completeness regresses:** this would mean the live-verified fix from the
+docs-branch investigation doesn't reproduce in the full pipeline context
+— stop and escalate rather than iterating further prompt wording ad hoc,
+same discipline as Task 6's original stop-gates.
+
+- [ ] **Step 6: Record both the original baseline and the revised result in the spec's revision history**
 
 Add a new row to the revision history table in
 `docs/superpowers/specs/2026-07-20-generation-grounding-gap-design.md`
-confirming the re-verification result with the real output (5/5 or
-whatever was actually observed — not assumed).
+covering: (a) the original-wording baseline table above, explicitly
+noting Task 6's Steps 4-5 were completed here rather than at the time,
+and (b) this step's actual revised-wording output (5/5 or whatever was
+actually observed — not assumed).
 
 - [ ] **Step 7: Commit**
 
@@ -1057,3 +1096,4 @@ git commit -m "docs: confirm revised prompt fix holds in full re-verification (i
 | 2026-07-20 | **Fourth independent fresh Fable review**: 0 BLOCKERs again — second consecutive clean round. Found 1 new SUGGESTION: `KNOWN_TEMPERATURE_SAFE_MODELS` (the runtime allowlist backstop) has no update step tied to the model-swap procedure, so it would false-alarm on every legitimate future swap after the first, not just genuinely risky ones. Fixed: the CLAUDE.md doc note and the allowlist's own code comment now both say to add a newly-verified-safe model to the allowlist as part of the swap procedure, and the spec's §6 records the same. |
 | 2026-07-20 | **Fifth independent fresh Fable review**: 0 BLOCKERs, 0 SUGGESTIONs — third consecutive clean round, this time with no substantive findings at all. Independently confirmed the PR #72 golden-count scenario (30→32) had actually occurred on `main` and the plan's pre-written caveat held up correctly. 1 cosmetic NIT: Task 6's compound stop-gate parenthetical could be misread as scoping to only the 2 new Task-3 entries rather than all 16 compound questions. Fixed: reworded to explicitly cover "ANY of the 16 compound questions." Given three consecutive independent rounds (3, 4, 5) have found zero, one, and zero substantive issues respectively — a clear diminishing-returns trend after the two real BLOCKERs in rounds 1-2 — this is treated as converged; no further fresh-dispatch rounds planned pending Markus's merge sign-off. |
 | 2026-07-21 | **Mid-execution finding on `fix/generation-grounding-gap`** (Tasks 1-5 already executed): Task 6's live verification found Task 1's shipped prompt wording didn't fix issue #65's own primary reproduction question (5/5 confident, incorrect assertions at `temperature: 0`). Investigated on this docs branch rather than patched ad hoc: a more explicit "trace pronoun referents" variant was tested and failed worse (5/5, plus the model misquoted the source text); a targeted single-fact instruction (states the handball rule's actual scope directly, doesn't ask the model to derive it) was tested and fixed the target case 5/5 with no regression on the already-passing second hedge question or 3 spot-check golden questions. Design spec §4.2.2 revised with the full investigation (new §4.2.2.1); Task 1's `SYSTEM_PROMPT` code block updated to the verified final wording; new Task 7 added to apply that wording to the already-executed code and re-run Task 6's hedge verification to confirm the fix holds end to end. |
+| 2026-07-21 | **PR #76 opened** (base `fix/generation-grounding-gap`, per this project's spec/plan-revision rule). Round 1 fresh Fable review: 0 BLOCKERs — independently verified the root-cause passage read against the live corpus, the "original wording" quote against the real branch, and the revised prompt's syntax. 2 SUGGESTIONs (spec §2's root-cause theory left inconsistent with §4.2.2.1's own finding; Task 7's Files header omitted the spec file its own steps commit) + 1 NIT, both SUGGESTIONs fixed and re-verified clean. **Round 2, independent fresh dispatch:** found 1 real BLOCKER neither authoring nor round 1 caught — Task 7's Step 5 claimed golden/paraphrase/compound completeness were "already confirmed unaffected," but the investigation had only spot-checked 3 golden questions and never touched paraphrase, compound, or the real committed code at all. Fixed by rewriting Step 5/6 to record the real original-wording baseline (actually measured live during the investigation: golden 32/32, paraphrase 10/10, compound 2/16, hedge Q1 0/5, hedge Q2 5/5 — Task 6's own Steps 4-5 had never been completed either, folded into this fix) and requiring a genuine re-check against it, not an assumption. Also found 1 SUGGESTION (the new instruction's absolute "documents don't cover this" claim isn't provably universal — a topically-adjacent `Law 5 › 3` advantage clause exists in the corpus and could in principle be retrieved for a differently-phrased version of the question, though it never was across ~15 live test runs) — documented as a known, accepted residual risk rather than preemptively engineered against, consistent with this fix's own narrow-and-verified philosophy. 1 NIT (a cosmetic quote-style mismatch between the plan's code block and the spec's blockquote — both claimed identical final wording but weren't byte-identical) — fixed. |
