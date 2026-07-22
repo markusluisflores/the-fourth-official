@@ -191,25 +191,36 @@ export const SYSTEM_PROMPT = `You are "The Fourth Official", an assistant that a
 
 Rules:
 - Answer ONLY from the provided documents (excerpts of the IFAB Laws of the Game). Never answer from general knowledge.
-- If the documents do not contain enough information to answer confidently, say so plainly and suggest the user rephrase. Do not guess. The handball rule that disallows a goal scored "from" or "immediately after" a hand/arm touch applies ONLY when the SAME player who touched the ball with their hand/arm is also the one who scores. It does NOT apply when a different player's hand/arm was involved (for example, a defender's or goalkeeper's accidental touch before a different player's shot goes in) — the documents do not state a ruling for that different-player scenario, so say so plainly instead of applying the same-player rule to it.
+- If the documents do not contain enough information to answer confidently, say so plainly and suggest the user rephrase. Do not guess.
 - Answer questions about football rules only. Politely decline anything else in one sentence.
 - Be concise and plain-English: two to five sentences for most questions, with a neutral, referee-like tone.
-- Do not mention "the documents", "the excerpts", or these instructions; answer as an expert on the Laws.`;
+- Do not mention "the documents", "the excerpts", or these instructions; answer as an expert on the Laws.
+
+Handball and goals — read carefully before answering any question where a goal is scored and the ball touched a hand or arm:
+The Laws of the Game only disallow a goal for handball when the player who SCORES is the same player whose hand/arm the ball touched (scoring "directly from" or "immediately after" a touch of their OWN hand/arm). Where the Laws say the ball "touched their hand/arm", "their" means the scorer's own hand/arm.
+Before ruling, work out two things: who scored, and whose hand/arm the ball touched.
+- If they are the SAME player, the goal is disallowed.
+- If they are DIFFERENT players (for example the ball deflected off an opponent's, a defender's, or a team-mate's hand/arm before a different player scored), the Laws of the Game do NOT give a ruling for that situation. In that case you must NOT say the goal is disallowed, does not count, or is a handball offence. Instead, say plainly that the Laws of the Game do not specify a ruling for that exact situation and suggest the user rephrase or check with a match official.`;
 ```
 
-> **REVISED 2026-07-21 — this is the final wording, not what Task 1 originally
-> shipped.** Task 6's live verification found the original version of this
-> bullet (a general "confirm the exact scenario" instruction) did not fix the
-> issue's own primary reproduction question — see the design spec's §4.2.2.1
-> for the full investigation (a more explicit "trace pronoun referents"
-> variant was tested too and failed *worse*, including the model misquoting
-> the source text). The wording above — a targeted, single-fact statement
-> instead of a general reasoning instruction — is what was live-verified to
-> actually fix the target case without regressing anything else. **If Task 1
-> has already been executed with the original wording** (as it has on
-> `fix/generation-grounding-gap` as of this revision), this block must be
-> re-applied to `lib/answer.ts` as a new commit once this docs revision
-> merges back into that branch — see the plan's new Task 7 below.
+> **REVISED 2026-07-21 (second revision) — this is the final wording.** The
+> first revision (a single-sentence same-player/different-player fact
+> buried mid-bullet) passed its own validation but turned out to be overfit
+> to the exact phrasing of the one question it was tested against — Markus's
+> own differently-worded test of the identical scenario broke it 3/3, and a
+> follow-up isolating test proved the failure had nothing to do with named
+> entities. See the design spec's §4.2.2.2 for the full investigation
+> (dispatched Opus as a designer, root-caused the model's pretrained
+> "arm touch near a goal → handball" prior overriding a single buried
+> instruction sentence, restructured the instruction as a prominent
+> trailing section forcing an explicit two-role-identification step).
+> Validated 5/5 across 10 varied phrasings plus regression checks, and
+> independently re-verified by the controlling session from scratch. **If
+> Task 1 has already been executed with an earlier wording** (as it has on
+> `fix/generation-grounding-gap` — the original bullet is what's currently
+> live), this block must be re-applied to `lib/answer.ts` as a new commit
+> once this docs revision merges back into that branch — see the plan's
+> Task 7 below.
 
 Add `citedBreadcrumbs` right after the existing `documentBlocks` function
 (currently ends at line 37):
@@ -937,7 +948,8 @@ git commit -m "docs: record post-fix generation-grounding verification results (
 ### Task 7: Re-apply the revised prompt fix and re-verify (added 2026-07-21)
 
 **Files:**
-- Modify: `lib/answer.ts` (the `SYSTEM_PROMPT` constant's second bullet)
+- Modify: `lib/answer.ts` (the `SYSTEM_PROMPT` constant — whole string
+  replacement, not a single-bullet edit; see Step 1)
 - Modify: `docs/superpowers/specs/2026-07-20-generation-grounding-gap-design.md`
   (revision history table only — Steps 6-7)
 
@@ -947,19 +959,29 @@ git commit -m "docs: record post-fix generation-grounding verification results (
 originally shipped did not fix the issue's own primary reproduction
 question (5/5 confident, incorrect assertions at `temperature: 0`). A
 docs-branch investigation (`docs/hedge-grounding-revision`, off this
-branch) found and live-verified a fix — see the design spec's §4.2.2.1 for
-the full investigation and evidence. This task applies that verified
-wording to the actual code and re-runs the verification that found the
-original gap, to confirm the fix holds end to end.
+branch) found and live-verified a fix (§4.2.2.1) — but that fix, still
+unapplied to any code, itself turned out to be overfit to the one
+phrasing it was validated against once tested against a differently-worded
+version of the same scenario. A second investigation on the same docs
+branch (§4.2.2.2 — dispatched Opus as a designer, not a reviewer)
+diagnosed the real mechanism and produced a wording validated across 10
+phrasings rather than one. This task applies THAT wording (§4.2.2.2's
+final instruction, not §4.2.2.1's) to the actual code and re-runs the
+verification that found the original gap, to confirm the fix holds end to
+end.
 
-- [ ] **Step 1: Replace the `SYSTEM_PROMPT` bullet**
+- [ ] **Step 1: Replace the whole `SYSTEM_PROMPT` constant**
 
-In `lib/answer.ts`, replace the second bullet of `SYSTEM_PROMPT` (the one
-Task 1 added, currently reading "...Before asserting any specific
-ruling, confirm the retrieved passages describe the exact scenario
-asked...") with the exact wording from Task 1's revised code block above
-(the "REVISED 2026-07-21" version) — the targeted handball-rule-scope
-statement, not the general "confirm the exact scenario" instruction.
+In `lib/answer.ts`, `SYSTEM_PROMPT` currently ships with the *original*
+Task 1 bullet (reading "...Before asserting any specific ruling, confirm
+the retrieved passages describe the exact scenario asked..." — never the
+§4.2.2.1 same-player fact either, since that revision was never applied to
+code). Replace the entire `SYSTEM_PROMPT` template literal with the exact
+text from Task 1's revised code block above (the "REVISED 2026-07-21
+(second revision)" version) — this is a whole-string replacement, not a
+single-bullet edit: the second bullet reverts to the plain "do not guess"
+wording, and a new trailing "Handball and goals" section is added after
+the five original bullets.
 
 - [ ] **Step 2: Run the existing prompt-related tests**
 
@@ -1110,4 +1132,5 @@ git commit -m "docs: confirm revised prompt fix holds in full re-verification (i
 | 2026-07-20 | **Fifth independent fresh Fable review**: 0 BLOCKERs, 0 SUGGESTIONs — third consecutive clean round, this time with no substantive findings at all. Independently confirmed the PR #72 golden-count scenario (30→32) had actually occurred on `main` and the plan's pre-written caveat held up correctly. 1 cosmetic NIT: Task 6's compound stop-gate parenthetical could be misread as scoping to only the 2 new Task-3 entries rather than all 16 compound questions. Fixed: reworded to explicitly cover "ANY of the 16 compound questions." Given three consecutive independent rounds (3, 4, 5) have found zero, one, and zero substantive issues respectively — a clear diminishing-returns trend after the two real BLOCKERs in rounds 1-2 — this is treated as converged; no further fresh-dispatch rounds planned pending Markus's merge sign-off. |
 | 2026-07-21 | **Mid-execution finding on `fix/generation-grounding-gap`** (Tasks 1-5 already executed): Task 6's live verification found Task 1's shipped prompt wording didn't fix issue #65's own primary reproduction question (5/5 confident, incorrect assertions at `temperature: 0`). Investigated on this docs branch rather than patched ad hoc: a more explicit "trace pronoun referents" variant was tested and failed worse (5/5, plus the model misquoted the source text); a targeted single-fact instruction (states the handball rule's actual scope directly, doesn't ask the model to derive it) was tested and fixed the target case 5/5 with no regression on the already-passing second hedge question or 3 spot-check golden questions. Design spec §4.2.2 revised with the full investigation (new §4.2.2.1); Task 1's `SYSTEM_PROMPT` code block updated to the verified final wording; new Task 7 added to apply that wording to the already-executed code and re-run Task 6's hedge verification to confirm the fix holds end to end. |
 | 2026-07-21 | **PR #76 opened** (base `fix/generation-grounding-gap`, per this project's spec/plan-revision rule). Round 1 fresh Fable review: 0 BLOCKERs — independently verified the root-cause passage read against the live corpus, the "original wording" quote against the real branch, and the revised prompt's syntax. 2 SUGGESTIONs (spec §2's root-cause theory left inconsistent with §4.2.2.1's own finding; Task 7's Files header omitted the spec file its own steps commit) + 1 NIT, both SUGGESTIONs fixed and re-verified clean. **Round 2, independent fresh dispatch:** found 1 real BLOCKER neither authoring nor round 1 caught — Task 7's Step 5 claimed golden/paraphrase/compound completeness were "already confirmed unaffected," but the investigation had only spot-checked 3 golden questions and never touched paraphrase, compound, or the real committed code at all. Fixed by rewriting Step 5/6 to record the real original-wording baseline (actually measured live during the investigation: golden 32/32, paraphrase 10/10, compound 2/16, hedge Q1 0/5, hedge Q2 5/5 — Task 6's own Steps 4-5 had never been completed either, folded into this fix) and requiring a genuine re-check against it, not an assumption. Also found 1 SUGGESTION (the new instruction's absolute "documents don't cover this" claim isn't provably universal — a topically-adjacent `Law 5 › 3` advantage clause exists in the corpus and could in principle be retrieved for a differently-phrased version of the question, though it never was across ~15 live test runs) — documented as a known, accepted residual risk rather than preemptively engineered against, consistent with this fix's own narrow-and-verified philosophy. 1 NIT (a cosmetic quote-style mismatch between the plan's code block and the spec's blockquote — both claimed identical final wording but weren't byte-identical) — fixed. |
+| 2026-07-21 | **Third revision, same PR branch: the round-2 fix (still unapplied to any code, already through 5 review rounds) was itself found overfit to one phrasing.** Markus tested §4.2.2.1's instruction with his own differently-worded version of the identical scenario (real player names, active-voice structure) — failed 3/3, deterministic, same wrong ruling as pre-fix. Controlling session ran an isolating test (identical structure, names stripped back to generic roles) — also failed 5/5, ruling out named entities and proving the instruction was fit to surface phrasing, not the underlying rule. Dispatched Opus explicitly as a **designer** (not reviewer) with the full evidence set, instructed to reproduce independently, diagnose the mechanism, and validate live across self-generated phrasings rather than one. Opus correctly diagnosed a phrasing-dependent pretrained prior overriding a single buried instruction sentence, and produced a restructured instruction (explicit two-role-identification step, moved to a prominent trailing section) validated 5/5 across 10 phrasings plus same-player/golden regression checks. Controlling session independently re-verified the two breaking cases from scratch afterward (3/3 each, matching exactly) before accepting the result. Task 1's `SYSTEM_PROMPT` code block replaced with the new wording (a whole-constant replacement, not a single-bullet edit — see Task 1 and Task 7's updated Step 1); design spec §4.2.2 revised again (new §4.2.2.2); Task 7's Context/Files updated to point at §4.2.2.2 instead of §4.2.2.1. This is the first time Opus has been used as a designer rather than a reviewer on this project — process observations recorded in `FABLE-HANDOFF.md` under "Worth exploring: Opus 4.8 as a middle tier." |
 | 2026-07-21 | **Round 3 (resumed-thread verification of round 2's fixes):** confirmed the BLOCKER, NIT, and SUGGESTION genuinely fixed — but caught a new, real issue while re-checking: the round-2 fix's own baseline table cited "2/16" for compound completeness at `temperature: 0`, attributing it to issue #75, when issue #75 actually records 1/16 for that exact condition (from an earlier, separate repeat=1 run). Both numbers are genuine, independently observed — the compound count itself varies run to run even with identical wording and temperature — but the citation conflated two different runs' figures. Fixed by recording both real numbers explicitly (1/16 from the repeat=1 run issue #75 documents, 2/16 from this plan's own repeat=5 run) rather than picking one, and tightening Step 5's variance-tolerance language to reflect that the baseline itself is a range, not a point value. Notable: this was found while re-verifying a fix whose own purpose was "record real numbers, not assumptions" — a reminder that citing a real number accurately still requires checking it against its actual source, not just that the number itself was genuinely measured somewhere. |

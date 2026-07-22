@@ -252,8 +252,8 @@ narrow, verified-against-observed-behavior fix: revisit if it's ever
 actually observed, not preemptively engineered against a retrieval
 combination that hasn't happened.
 
-**Final instruction** (`SYSTEM_PROMPT`, `lib/answer.ts` — second bullet,
-replacing what Task 1 originally shipped):
+**Instruction produced by this round (SUPERSEDED 2026-07-21 — see §4.2.2.2
+for why this did not hold up and what replaced it):**
 
 > If the documents do not contain enough information to answer
 > confidently, say so plainly and suggest the user rephrase. Do not
@@ -265,6 +265,122 @@ replacing what Task 1 originally shipped):
 > different player's shot goes in) — the documents do not state a ruling
 > for that different-player scenario, so say so plainly instead of
 > applying the same-player rule to it.
+
+This wording passed its own validation (5/5 on the original reproduction
+question, no regression on hedge Q2 or 3 spot-check golden questions) and
+was carried by PR #76 through 5 review rounds without any reviewer
+independently re-phrasing the reproduction question to check for
+overfitting. It shipped only as far as this docs branch — never applied to
+`lib/answer.ts` — before Markus's own manual test in the next round found
+it didn't actually hold up. See §4.2.2.2.
+
+##### 4.2.2.2 Third investigation: the fix was overfit to one phrasing, not the underlying rule (2026-07-21)
+
+**What broke it:** Markus tested the instruction above with his own
+phrasing of the identical scenario — real player names, active-voice
+sentence structure ("Luka Modric took a shot... the shot hit the arm of
+opposition player John Stones... Does that count?") instead of the
+established reproduction question's phrasing ("a player shoots a shot and
+it bounces off the arm of an opponent..."). Result: **3/3 failures**,
+deterministic, same wrong ruling as before any fix existed — the model
+never engaged the same-player/different-player distinction at all.
+
+**Isolating test (controlling session):** to check whether the failure was
+caused by the named entities specifically, re-ran the identical sentence
+structure with the names stripped back to generic roles ("A player took a
+shot... the shot hit the arm of an opposition player... Does that
+count?"). **Also failed, 5/5, identically.** This ruled out named entities
+as the cause and proved something more serious: the §4.2.2.1 instruction
+was fixing the *surface phrasing* of the one question it was validated
+against, not the underlying rule it claimed to encode. The established
+reproduction question and this generic rewording describe the exact same
+scenario; only sentence structure differs.
+
+**Root cause, diagnosed by Opus (dispatched as designer, not reviewer —
+see `FABLE-HANDOFF.md` for the full process note on this):** the answer
+model has a strong pretrained prior that "ball touches an arm right before
+a goal → handball → disallowed," reinforced by real-world football
+controversies in its training data. The §4.2.2.1 instruction stated the
+same-player/different-player distinction as one flat sentence buried
+mid-bullet — strong enough to win against that prior on the one phrasing
+it happened to be tested against, but not reliably strong enough in
+general. Whether the prior wins is phrasing-dependent, not scenario-
+dependent, which is exactly what made the bug invisible to a single-
+phrasing validation.
+
+**What actually held up:** moving the distinction out of the buried bullet
+into a dedicated, prominent trailing section that forces an explicit
+two-role-identification step (who scored, whose hand/arm was touched)
+before any ruling, rather than stating the distinction as a fact to recall:
+
+> Handball and goals — read carefully before answering any question where
+> a goal is scored and the ball touched a hand or arm:
+> The Laws of the Game only disallow a goal for handball when the player
+> who SCORES is the same player whose hand/arm the ball touched (scoring
+> "directly from" or "immediately after" a touch of their OWN hand/arm).
+> Where the Laws say the ball "touched their hand/arm", "their" means the
+> scorer's own hand/arm.
+> Before ruling, work out two things: who scored, and whose hand/arm the
+> ball touched.
+> - If they are the SAME player, the goal is disallowed.
+> - If they are DIFFERENT players (for example the ball deflected off an
+>   opponent's, a defender's, or a team-mate's hand/arm before a different
+>   player scored), the Laws of the Game do NOT give a ruling for that
+>   situation. In that case you must NOT say the goal is disallowed, does
+>   not count, or is a handball offence. Instead, say plainly that the
+>   Laws of the Game do not specify a ruling for that exact situation and
+>   suggest the user rephrase or check with a match official.
+
+**Validation, this round — deliberately across many phrasings, not one:**
+10 distinct phrasings of the different-player scenario, 5 runs each at
+`temperature: 0`, all 5/5 correct hedges: the original reproduction
+question; both of Markus's variants (named opponent, named teammate); the
+controlling session's generic isolating test; and 5 more Opus generated
+itself (a defender's hand, a goalmouth-scramble deflection, a cross
+deflecting off an outstretched arm, a second named-player pairing, a ball
+"clipping" an elbow). Regression checks against two same-player scenarios
+and existing golden questions (own-goal-scored-off-goalkeeper's-arm,
+backpass, offside) confirmed no new over-hedging — all still ruled
+confidently and correctly. The controlling session independently re-ran
+the two specific cases that broke the prior instruction (3x each, from
+scratch, against the live corpus/API) after receiving Opus's report rather
+than trusting the summary alone — matched exactly, 3/3 both.
+
+**Scope note (unchanged from §4.2.2.1, still applies):** this remains a
+targeted, single-scenario patch, not a general fix for "corpus states a
+rule for configuration X, question asks about configuration Y." Opus's own
+stated caveat: this generalizes far better than the superseded wording but
+is not a proof of zero remaining adversarial phrasings, and the general
+class would need the rejected §4.1 claim-verification architecture to
+close fully. The §4.2.2.1 residual risk note about the `Law 5 › 3`
+advantage clause still applies unchanged — this revision does not touch
+that risk.
+
+**Final instruction** (`SYSTEM_PROMPT`, `lib/answer.ts` — replaces the
+§4.2.2.1 second bullet and adds a new trailing section, superseding both
+prior versions in this file's history):
+
+> If the documents do not contain enough information to answer
+> confidently, say so plainly and suggest the user rephrase. Do not
+> guess.
+>
+> Handball and goals — read carefully before answering any question where
+> a goal is scored and the ball touched a hand or arm:
+> The Laws of the Game only disallow a goal for handball when the player
+> who SCORES is the same player whose hand/arm the ball touched (scoring
+> "directly from" or "immediately after" a touch of their OWN hand/arm).
+> Where the Laws say the ball "touched their hand/arm", "their" means the
+> scorer's own hand/arm.
+> Before ruling, work out two things: who scored, and whose hand/arm the
+> ball touched.
+> - If they are the SAME player, the goal is disallowed.
+> - If they are DIFFERENT players (for example the ball deflected off an
+>   opponent's, a defender's, or a team-mate's hand/arm before a different
+>   player scored), the Laws of the Game do NOT give a ruling for that
+>   situation. In that case you must NOT say the goal is disallowed, does
+>   not count, or is a handball offence. Instead, say plainly that the
+>   Laws of the Game do not specify a ruling for that exact situation and
+>   suggest the user rephrase or check with a match official.
 
 #### 4.2.3 Generation-level verification harness (new)
 
@@ -426,3 +542,4 @@ without leaving the exact failure this issue reports unverified.
 | 2026-07-20 | Initial spec — approved in-session after iterative scoping discussion (temperature value, completeness vs. hedging check split, manual-review boundary for the hedging check). |
 | 2026-07-20 | Fable review (PR #73, fresh dispatch): found the §6 deprecation risk mitigation was placed where the actual risk-triggering action (a Railway `ANTHROPIC_MODEL` env var change) would never see it, and that the risk's own wording misstated the SDK's documented behavior (no silent-coercion path for this app's `temperature: 0` — only a loud 400). Root-cause analysis, chosen fix, and both new compound-questions.json entries (retrieval rank included, not just DB content) independently re-verified live and confirmed accurate. Fixed: corrected the wording, elevated the mitigation to a CLAUDE.md doc update plus a runtime allowlist warning (implementation plan Task 1 updated to match). |
 | 2026-07-21 | **Mid-execution finding, this revision:** Task 6's live verification (implementation on `fix/generation-grounding-gap`, PR #73's spec/plan already merged) found the shipped prompt hardening (§4.2.2's original instruction) did not fix the issue's own primary reproduction question — 5/5 confident, incorrect assertions at `temperature: 0`, consistent rather than nondeterministic. Investigated live rather than patching ad hoc: confirmed the retrieved passage isn't actually grammatically ambiguous (single consistent subject throughout); tested a more explicit "trace pronoun referents" instruction, which failed *worse* (5/5, plus the model began misquoting the source text, inserting a word — "opponent's" — that isn't in the actual passage); tested a targeted, single-fact instruction stating the specific rule scope directly instead of asking the model to derive it, which fixed the target case 5/5 with no regression on the already-passing second hedge question or 3 spot-check golden questions (including another handball question, checked specifically for over-hedging). §4.2.2 revised with the full investigation and the new instruction — see §4.2.2.1. This is the fifth review-branch revision cycle this project has now used for a mid-execution finding requiring a real design change rather than a code patch (see this project's spec/plan-revision rule, `CLAUDE.md` → Global conventions). |
+| 2026-07-21 | **Second mid-execution finding, this same revision:** the §4.2.2.1 instruction — already through 5 PR #76 review rounds and never applied to any code — turned out to be overfit to the surface phrasing of its one validated test question, not the underlying rule. Markus's own manual test (real player names, different sentence structure, identical scenario) failed 3/3; a controlling-session isolating test (same structure, names stripped) also failed 5/5, ruling out named entities as the cause and proving the phrasing itself was the variable. Rather than continue ad hoc wording iteration in-session — the same pattern that produced both broken "fixes" so far — dispatched Opus explicitly in a **designer** role (not reviewer), instructed to reproduce the failure independently, diagnose the actual mechanism, and validate any proposed fix live across multiple self-generated phrasings before reporting back. Opus correctly diagnosed the model's pretrained "arm touch near a goal → handball" prior overriding a single buried instruction sentence in a phrasing-dependent way, and produced a restructured instruction (explicit two-role-identification step, moved to a prominent trailing section) validated 5/5 across 10 varied phrasings plus same-player/golden-question regression checks. Controlling session independently re-verified the two specific breaking cases from scratch afterward (3/3 each, matching exactly) before accepting the result. §4.2.2 revised again — see §4.2.2.2 for the full investigation and the new final instruction. This is the first time Opus has been used as a designer rather than a reviewer on this project; process observations recorded in `FABLE-HANDOFF.md`. |
