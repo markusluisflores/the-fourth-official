@@ -1009,14 +1009,26 @@ the real data already gathered):
 |---|---|
 | Golden | 32/32 cited |
 | Paraphrase | 10/10 cited |
-| Compound | 2/16 full |
+| Compound | 2/16 full (this specific 5x-repeat run — see note below) |
 | Hedge Q1 (original bug reproduction) | 0/5 correct (5/5 asserted an unsupported ruling) |
 | Hedge Q2 (goalkeeper own-goal) | 5/5 correct |
 
-(For reference, also measured at `temperature: 1` with the same original
-wording: compound 2/16 full, hedge Q1 0/5 correct, hedge Q2 5/5 correct —
-recorded in issue #75 and this spec's revision history as the evidence
-that temperature wasn't the driver of either gap.)
+**Correction (2026-07-21, PR #76 round 3 — flagged by fresh Fable review):**
+the compound figure above (2/16) is from this specific repeat=5 run, not
+the figure issue #75 cites. Issue #75's own measurement, from an earlier
+single-run (repeat=1) pass with the same original wording and
+temperature, recorded 1/16 (its "1/5" figure scaled to the full 16-entry
+set). Both numbers are genuine, independently observed — the compound
+count itself varies run to run even with identical wording and
+temperature, exactly the kind of noise-level variance Step 5's own
+tolerance below already expects. Citing a single figure as "the" baseline
+without noting this was an oversight; recorded both real numbers instead
+of picking one, so the actual observed range (1-2/16) is what Step 5
+should compare against, not a single point value. For reference, also
+measured at `temperature: 1` with the same original wording: compound
+2/16 full (matches issue #75's own temp=1 figure), hedge Q1 0/5 correct,
+hedge Q2 5/5 correct — recorded in issue #75 and this spec's revision
+history as the evidence that temperature wasn't the driver of either gap.
 
 Expected with the *revised* wording (this step's actual run):
 - **Hedge set:** both questions show 5/5 correct hedges — specifically,
@@ -1030,9 +1042,10 @@ Expected with the *revised* wording (this step's actual run):
 - **Compound:** record whatever the real number is. A small change (e.g.
   1-3/16) is expected to be sample noise, not a systematic effect — the
   original-wording baseline itself already varied between 1/16 and 2/16
-  across temperature settings with no wording change at all (see table
-  above and issue #75). Flag it only if it looks like a real, large,
-  systematic drop, not ordinary variance.
+  across *both* different runs at the same temperature and across
+  different temperatures, with no wording change at all (see the
+  correction note above and issue #75). Flag it only if it looks like a
+  real, large, systematic drop, not ordinary variance.
 
 **If any hedge run still asserts an unsupported ruling, or golden/paraphrase
 completeness regresses:** this would mean the live-verified fix from the
@@ -1097,3 +1110,4 @@ git commit -m "docs: confirm revised prompt fix holds in full re-verification (i
 | 2026-07-20 | **Fifth independent fresh Fable review**: 0 BLOCKERs, 0 SUGGESTIONs — third consecutive clean round, this time with no substantive findings at all. Independently confirmed the PR #72 golden-count scenario (30→32) had actually occurred on `main` and the plan's pre-written caveat held up correctly. 1 cosmetic NIT: Task 6's compound stop-gate parenthetical could be misread as scoping to only the 2 new Task-3 entries rather than all 16 compound questions. Fixed: reworded to explicitly cover "ANY of the 16 compound questions." Given three consecutive independent rounds (3, 4, 5) have found zero, one, and zero substantive issues respectively — a clear diminishing-returns trend after the two real BLOCKERs in rounds 1-2 — this is treated as converged; no further fresh-dispatch rounds planned pending Markus's merge sign-off. |
 | 2026-07-21 | **Mid-execution finding on `fix/generation-grounding-gap`** (Tasks 1-5 already executed): Task 6's live verification found Task 1's shipped prompt wording didn't fix issue #65's own primary reproduction question (5/5 confident, incorrect assertions at `temperature: 0`). Investigated on this docs branch rather than patched ad hoc: a more explicit "trace pronoun referents" variant was tested and failed worse (5/5, plus the model misquoted the source text); a targeted single-fact instruction (states the handball rule's actual scope directly, doesn't ask the model to derive it) was tested and fixed the target case 5/5 with no regression on the already-passing second hedge question or 3 spot-check golden questions. Design spec §4.2.2 revised with the full investigation (new §4.2.2.1); Task 1's `SYSTEM_PROMPT` code block updated to the verified final wording; new Task 7 added to apply that wording to the already-executed code and re-run Task 6's hedge verification to confirm the fix holds end to end. |
 | 2026-07-21 | **PR #76 opened** (base `fix/generation-grounding-gap`, per this project's spec/plan-revision rule). Round 1 fresh Fable review: 0 BLOCKERs — independently verified the root-cause passage read against the live corpus, the "original wording" quote against the real branch, and the revised prompt's syntax. 2 SUGGESTIONs (spec §2's root-cause theory left inconsistent with §4.2.2.1's own finding; Task 7's Files header omitted the spec file its own steps commit) + 1 NIT, both SUGGESTIONs fixed and re-verified clean. **Round 2, independent fresh dispatch:** found 1 real BLOCKER neither authoring nor round 1 caught — Task 7's Step 5 claimed golden/paraphrase/compound completeness were "already confirmed unaffected," but the investigation had only spot-checked 3 golden questions and never touched paraphrase, compound, or the real committed code at all. Fixed by rewriting Step 5/6 to record the real original-wording baseline (actually measured live during the investigation: golden 32/32, paraphrase 10/10, compound 2/16, hedge Q1 0/5, hedge Q2 5/5 — Task 6's own Steps 4-5 had never been completed either, folded into this fix) and requiring a genuine re-check against it, not an assumption. Also found 1 SUGGESTION (the new instruction's absolute "documents don't cover this" claim isn't provably universal — a topically-adjacent `Law 5 › 3` advantage clause exists in the corpus and could in principle be retrieved for a differently-phrased version of the question, though it never was across ~15 live test runs) — documented as a known, accepted residual risk rather than preemptively engineered against, consistent with this fix's own narrow-and-verified philosophy. 1 NIT (a cosmetic quote-style mismatch between the plan's code block and the spec's blockquote — both claimed identical final wording but weren't byte-identical) — fixed. |
+| 2026-07-21 | **Round 3 (resumed-thread verification of round 2's fixes):** confirmed the BLOCKER, NIT, and SUGGESTION genuinely fixed — but caught a new, real issue while re-checking: the round-2 fix's own baseline table cited "2/16" for compound completeness at `temperature: 0`, attributing it to issue #75, when issue #75 actually records 1/16 for that exact condition (from an earlier, separate repeat=1 run). Both numbers are genuine, independently observed — the compound count itself varies run to run even with identical wording and temperature — but the citation conflated two different runs' figures. Fixed by recording both real numbers explicitly (1/16 from the repeat=1 run issue #75 documents, 2/16 from this plan's own repeat=5 run) rather than picking one, and tightening Step 5's variance-tolerance language to reflect that the baseline itself is a range, not a point value. Notable: this was found while re-verifying a fix whose own purpose was "record real numbers, not assumptions" — a reminder that citing a real number accurately still requires checking it against its actual source, not just that the number itself was genuinely measured somewhere. |
