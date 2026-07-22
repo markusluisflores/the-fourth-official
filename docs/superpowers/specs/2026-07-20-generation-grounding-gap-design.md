@@ -142,7 +142,7 @@ The fix is expected to make the failure rare to the point of practical
 non-occurrence, not to offer a mathematical guarantee. §5's repeated-run
 testing is designed to measure this directly rather than assume it.
 
-#### 4.2.2 Prompt hardening (revised 2026-07-21 — see §4.2.2.1 for why)
+#### 4.2.2 Prompt hardening (revised 2026-07-21 — see §4.2.2.2 for the current fix and rationale; §4.2.2.1 is superseded but kept for the investigation trail)
 
 **Original instruction shipped in Task 1** (`SYSTEM_PROMPT`, `lib/answer.ts`),
 replacing the prior "do not guess" bullet with a version naming the
