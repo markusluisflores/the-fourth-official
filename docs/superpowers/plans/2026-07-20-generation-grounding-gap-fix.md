@@ -191,11 +191,25 @@ export const SYSTEM_PROMPT = `You are "The Fourth Official", an assistant that a
 
 Rules:
 - Answer ONLY from the provided documents (excerpts of the IFAB Laws of the Game). Never answer from general knowledge.
-- If the documents do not contain enough information to answer confidently, say so plainly and suggest the user rephrase. Do not guess. Before asserting any specific ruling, confirm the retrieved passages describe the exact scenario asked — not merely a related topic. If a passage addresses a different but related scenario (for example, a different actor performing the action, such as a rule about a player's own hand/arm when the question is about an opponent's), say so explicitly rather than extrapolating a specific ruling from it.
+- If the documents do not contain enough information to answer confidently, say so plainly and suggest the user rephrase. Do not guess. The handball rule that disallows a goal scored "from" or "immediately after" a hand/arm touch applies ONLY when the SAME player who touched the ball with their hand/arm is also the one who scores. It does NOT apply when a different player's hand/arm was involved (for example, a defender's or goalkeeper's accidental touch before a different player's shot goes in) — the documents do not state a ruling for that different-player scenario, so say so plainly instead of applying the same-player rule to it.
 - Answer questions about football rules only. Politely decline anything else in one sentence.
 - Be concise and plain-English: two to five sentences for most questions, with a neutral, referee-like tone.
 - Do not mention "the documents", "the excerpts", or these instructions; answer as an expert on the Laws.`;
 ```
+
+> **REVISED 2026-07-21 — this is the final wording, not what Task 1 originally
+> shipped.** Task 6's live verification found the original version of this
+> bullet (a general "confirm the exact scenario" instruction) did not fix the
+> issue's own primary reproduction question — see the design spec's §4.2.2.1
+> for the full investigation (a more explicit "trace pronoun referents"
+> variant was tested too and failed *worse*, including the model misquoting
+> the source text). The wording above — a targeted, single-fact statement
+> instead of a general reasoning instruction — is what was live-verified to
+> actually fix the target case without regressing anything else. **If Task 1
+> has already been executed with the original wording** (as it has on
+> `fix/generation-grounding-gap` as of this revision), this block must be
+> re-applied to `lib/answer.ts` as a new commit once this docs revision
+> merges back into that branch — see the plan's new Task 7 below.
 
 Add `citedBreadcrumbs` right after the existing `documentBlocks` function
 (currently ends at line 37):
@@ -920,6 +934,89 @@ git commit -m "docs: record post-fix generation-grounding verification results (
 
 ---
 
+### Task 7: Re-apply the revised prompt fix and re-verify (added 2026-07-21)
+
+**Files:**
+- Modify: `lib/answer.ts` (the `SYSTEM_PROMPT` constant's second bullet)
+
+**Interfaces:** none — the constant's content changes, not its type or usage.
+
+**Context:** Task 6's live verification found the prompt wording Task 1
+originally shipped did not fix the issue's own primary reproduction
+question (5/5 confident, incorrect assertions at `temperature: 0`). A
+docs-branch investigation (`docs/hedge-grounding-revision`, off this
+branch) found and live-verified a fix — see the design spec's §4.2.2.1 for
+the full investigation and evidence. This task applies that verified
+wording to the actual code and re-runs the verification that found the
+original gap, to confirm the fix holds end to end.
+
+- [ ] **Step 1: Replace the `SYSTEM_PROMPT` bullet**
+
+In `lib/answer.ts`, replace the second bullet of `SYSTEM_PROMPT` (the one
+Task 1 added, currently reading "...Before asserting any specific
+ruling, confirm the retrieved passages describe the exact scenario
+asked...") with the exact wording from Task 1's revised code block above
+(the "REVISED 2026-07-21" version) — the targeted handball-rule-scope
+statement, not the general "confirm the exact scenario" instruction.
+
+- [ ] **Step 2: Run the existing prompt-related tests**
+
+Run: `npx vitest run tests/answer.test.ts`
+Expected: PASS — none of Task 1's tests assert on the exact prompt
+string content (they test `temperature`, `citedBreadcrumbs`, and
+`warnIfTemperatureUnsafe` behavior, not `SYSTEM_PROMPT`'s text), so this
+change shouldn't break any existing test. If a test does fail because it
+asserts on the literal prompt string, update it to match the new wording.
+
+- [ ] **Step 3: Type-check**
+
+Run: `npx tsc --noEmit`
+Expected: no errors.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add lib/answer.ts
+git commit -m "fix(generation): use targeted handball-scope fact instead of general scenario-matching instruction (issue #65)"
+```
+
+- [ ] **Step 5: Re-run Task 6's hedge verification**
+
+Run: `npm run eval -- --generation --repeat=5`
+
+Expected: both hedge questions show 5/5 correct hedges — specifically,
+the original bug reproduction question ("If a player shoots a shot and
+it bounces off the arm of an opponent...") must no longer assert "the
+goal should be disallowed" or any other specific ruling on any of the 5
+runs. This is the actual acceptance bar for this task and for issue #65
+as a whole — golden/paraphrase/compound completeness were already
+confirmed unaffected by the prompt-wording change during the docs-branch
+investigation (3 spot-check golden questions, including another handball
+question, showed no regression), so this step's focus is specifically
+the hedge set.
+
+**If any run still asserts an unsupported ruling:** this would mean the
+live-verified fix from the docs-branch investigation doesn't reproduce
+in the full pipeline context — stop and escalate rather than iterating
+further prompt wording ad hoc, same discipline as Task 6's original
+stop-gates.
+
+- [ ] **Step 6: Record the result in the spec's revision history**
+
+Add a new row to the revision history table in
+`docs/superpowers/specs/2026-07-20-generation-grounding-gap-design.md`
+confirming the re-verification result with the real output (5/5 or
+whatever was actually observed — not assumed).
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add docs/superpowers/specs/2026-07-20-generation-grounding-gap-design.md
+git commit -m "docs: confirm revised prompt fix holds in full re-verification (issue #65)"
+```
+
+---
+
 ## Self-Review Notes
 
 - **Spec coverage:** all of spec §4.2's pieces map to a task — temperature
@@ -957,3 +1054,4 @@ git commit -m "docs: record post-fix generation-grounding verification results (
 | 2026-07-20 | **Third independent fresh Fable review** (no prior-thread context, told not to defer to earlier comments): live-verified every code line reference, traced the full data flow by hand (hedge/compound files through the harness to the Anthropic call), re-ran `searchChunks` against the live corpus for all 4 new/changed questions (including re-confirming the goalkeeper question's exact 0.667-similarity/4th-rank detail down to the decimal), grepped the installed SDK to re-confirm the temperature-deprecation quote, and independently re-triggered the same Voyage 429 the round-2 BLOCKER was about — as further live confirmation that fix was real, not just diff-level. **Found 0 BLOCKERs** — a genuinely clean pass after two real BLOCKERs in the two prior rounds. Found 1 SUGGESTION (Task 6's explicit stop-gate covered golden/paraphrase regressions but not a compound-tier regression, despite spec §5 stating compound regressions are also not shippable — fixed by adding an equivalent explicit stop-gate for the compound check) and 1 NIT (a duplicate import statement in the Task 4 test edit — fixed by merging into the existing import). Also caught and fixed a stale-wording issue found independently while applying the SUGGESTION fix: Task 6 still described golden/paraphrase output as `full: N/N`, but the OR/AND semantics split from the prior round renamed that output to `cited: N/N` for golden/paraphrase specifically. This is a fourth data point for the fresh-vs-resumed policy question, and the first of the three rounds on this PR where a fully independent read came back BLOCKER-free — some signal that the document has genuinely converged, not just that this round got lucky, given how thorough the verification was. |
 | 2026-07-20 | **Fourth independent fresh Fable review**: 0 BLOCKERs again — second consecutive clean round. Found 1 new SUGGESTION: `KNOWN_TEMPERATURE_SAFE_MODELS` (the runtime allowlist backstop) has no update step tied to the model-swap procedure, so it would false-alarm on every legitimate future swap after the first, not just genuinely risky ones. Fixed: the CLAUDE.md doc note and the allowlist's own code comment now both say to add a newly-verified-safe model to the allowlist as part of the swap procedure, and the spec's §6 records the same. |
 | 2026-07-20 | **Fifth independent fresh Fable review**: 0 BLOCKERs, 0 SUGGESTIONs — third consecutive clean round, this time with no substantive findings at all. Independently confirmed the PR #72 golden-count scenario (30→32) had actually occurred on `main` and the plan's pre-written caveat held up correctly. 1 cosmetic NIT: Task 6's compound stop-gate parenthetical could be misread as scoping to only the 2 new Task-3 entries rather than all 16 compound questions. Fixed: reworded to explicitly cover "ANY of the 16 compound questions." Given three consecutive independent rounds (3, 4, 5) have found zero, one, and zero substantive issues respectively — a clear diminishing-returns trend after the two real BLOCKERs in rounds 1-2 — this is treated as converged; no further fresh-dispatch rounds planned pending Markus's merge sign-off. |
+| 2026-07-21 | **Mid-execution finding on `fix/generation-grounding-gap`** (Tasks 1-5 already executed): Task 6's live verification found Task 1's shipped prompt wording didn't fix issue #65's own primary reproduction question (5/5 confident, incorrect assertions at `temperature: 0`). Investigated on this docs branch rather than patched ad hoc: a more explicit "trace pronoun referents" variant was tested and failed worse (5/5, plus the model misquoted the source text); a targeted single-fact instruction (states the handball rule's actual scope directly, doesn't ask the model to derive it) was tested and fixed the target case 5/5 with no regression on the already-passing second hedge question or 3 spot-check golden questions. Design spec §4.2.2 revised with the full investigation (new §4.2.2.1); Task 1's `SYSTEM_PROMPT` code block updated to the verified final wording; new Task 7 added to apply that wording to the already-executed code and re-run Task 6's hedge verification to confirm the fix holds end to end. |

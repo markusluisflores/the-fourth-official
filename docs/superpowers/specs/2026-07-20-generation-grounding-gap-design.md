@@ -133,16 +133,12 @@ The fix is expected to make the failure rare to the point of practical
 non-occurrence, not to offer a mathematical guarantee. §5's repeated-run
 testing is designed to measure this directly rather than assume it.
 
-#### 4.2.2 Prompt hardening
+#### 4.2.2 Prompt hardening (revised 2026-07-21 — see §4.2.2.1 for why)
 
-Current instruction (`SYSTEM_PROMPT`, `lib/answer.ts`):
-
-> "If the documents do not contain enough information to answer
-> confidently, say so plainly and suggest the user rephrase. Do not
-> guess."
-
-Replace with a version that names the specific failure mode this issue
-found — matching general topic but not matching scenario:
+**Original instruction shipped in Task 1** (`SYSTEM_PROMPT`, `lib/answer.ts`),
+replacing the prior "do not guess" bullet with a version naming the
+specific failure mode this issue found — matching general topic but not
+matching scenario:
 
 > "If the documents do not contain enough information to answer
 > confidently, say so plainly and suggest the user rephrase. Do not
@@ -153,9 +149,95 @@ found — matching general topic but not matching scenario:
 > a player's own hand/arm when the question is about an opponent's), say
 > so explicitly rather than extrapolating a specific ruling from it."
 
-Kept as a single expanded bullet (matching the existing prompt's bullet
-style) rather than a new separate rule, since it's a refinement of the
-existing "do not guess" instruction, not a new category of rule.
+**This did not fix the fix's own primary reproduction question.** Task 6's
+live verification (2026-07-21) ran the original bug's exact reproduction
+question 5 times at `temperature: 0` with this instruction in place: 5/5
+runs confidently asserted "the goal should be disallowed," the exact
+unsupported-ruling failure this issue exists to prevent — now happening
+*consistently* rather than nondeterministically. See §4.2.2.1 for the
+investigation and the replacement instruction that fixed it.
+
+##### 4.2.2.1 Investigation: why the general instruction failed, and what actually worked
+
+**The retrieved passage is not actually ambiguous, once traced carefully.**
+The Law 12 § 1 handball text reads: *"It is an offence if a player: ...
+scores in the opponents' goal: directly from their hand/arm... immediately
+after the ball has touched their hand/arm..."* — "a player" is the single
+subject governing the whole bulleted list, so "their hand/arm" clearly
+refers to the *same* player who scores, not a different one. A careful
+read resolves this cleanly. The original instruction (§4.2.2) already
+named almost this exact scenario abstractly ("a different actor
+performing the action, such as a rule about a player's own hand/arm when
+the question is about an opponent's") — and the model still failed on
+precisely this case.
+
+**Making the instruction more explicit and mechanical made it *worse*, not
+better.** Tested a stronger variant instructing the model to explicitly
+trace which noun each pronoun in a retrieved passage refers back to
+before applying any rule — same question, 5 runs at `temperature: 0`.
+Result: 5/5 failures, and the model went further than before — it
+**paraphrased the rule's text**, rendering it as *"the ball has touched an
+opponent's hand/arm"* when the actual source text says "their" (the
+scorer's own). That is not just a failure to hedge; it is misquoting the
+source to make an ungrounded ruling sound directly quoted. This is strong
+evidence the model has a surface-level pattern-match ("handball
+immediately before a goal → disallowed") that overrides careful
+instruction-following even under a maximally explicit, mechanical version
+of the instruction — general "reason more carefully" instructions are not
+a reliable lever here.
+
+**What worked: stating the specific fact directly, not asking the model to
+derive it.** Rather than teaching a general skill (trace referents
+carefully — tested above, failed), the fix states the one concrete,
+verified fact as a standing rule, the same way the prompt already states
+"answer football questions only" as a flat instruction rather than
+something to reason toward:
+
+> "The handball rule that disallows a goal scored 'from' or 'immediately
+> after' a hand/arm touch applies ONLY when the SAME player who touched
+> the ball with their hand/arm is also the one who scores. It does NOT
+> apply when a different player's hand/arm was involved (for example, a
+> defender's or goalkeeper's accidental touch before a different player's
+> shot goes in) — the documents do not state a ruling for that
+> different-player scenario, so say so plainly instead of applying the
+> same-player rule to it."
+
+Verified live (2026-07-21), replacing the prior instruction's second bullet
+with this one:
+- Original bug reproduction question: **5/5 correct hedges** at
+  `temperature: 0` (previously 5/5 failures with the original instruction,
+  and 5/5 failures with the more-explicit variant above).
+- Hedge question 2 (goalkeeper own-goal, already passing before): still
+  correctly hedges — the answer is if anything more precise, explicitly
+  noting the retrieved rule addresses goals scored *against* opponents.
+- 3 spot-check golden questions, including one other handball question
+  (checking the new instruction doesn't cause *over*-hedging on legitimate
+  handball questions the corpus does cover): all answered confidently and
+  correctly, no regression.
+
+**Scope note:** this is a targeted, single-fact addition, not a general
+mechanism — it fixes the one confirmed failure case, the same way issue
+#64's fix was a single-chunk override rather than a corpus-wide sweep (see
+that issue's own spec, §2, for the same "narrow and verified beats general
+and untested" reasoning). It would not automatically generalize to a
+different ambiguous rule elsewhere in the corpus if one is found later —
+that would need its own investigation and its own targeted fact, following
+this same method, not a broader "always trace referents" instruction,
+which this investigation showed actively backfires.
+
+**Final instruction** (`SYSTEM_PROMPT`, `lib/answer.ts` — second bullet,
+replacing what Task 1 originally shipped):
+
+> "If the documents do not contain enough information to answer
+> confidently, say so plainly and suggest the user rephrase. Do not
+> guess. The handball rule that disallows a goal scored 'from' or
+> 'immediately after' a hand/arm touch applies ONLY when the SAME player
+> who touched the ball with their hand/arm is also the one who scores. It
+> does NOT apply when a different player's hand/arm was involved (for
+> example, a defender's or goalkeeper's accidental touch before a
+> different player's shot goes in) — the documents do not state a ruling
+> for that different-player scenario, so say so plainly instead of
+> applying the same-player rule to it."
 
 #### 4.2.3 Generation-level verification harness (new)
 
@@ -316,3 +398,4 @@ without leaving the exact failure this issue reports unverified.
 |---|---|
 | 2026-07-20 | Initial spec — approved in-session after iterative scoping discussion (temperature value, completeness vs. hedging check split, manual-review boundary for the hedging check). |
 | 2026-07-20 | Fable review (PR #73, fresh dispatch): found the §6 deprecation risk mitigation was placed where the actual risk-triggering action (a Railway `ANTHROPIC_MODEL` env var change) would never see it, and that the risk's own wording misstated the SDK's documented behavior (no silent-coercion path for this app's `temperature: 0` — only a loud 400). Root-cause analysis, chosen fix, and both new compound-questions.json entries (retrieval rank included, not just DB content) independently re-verified live and confirmed accurate. Fixed: corrected the wording, elevated the mitigation to a CLAUDE.md doc update plus a runtime allowlist warning (implementation plan Task 1 updated to match). |
+| 2026-07-21 | **Mid-execution finding, this revision:** Task 6's live verification (implementation on `fix/generation-grounding-gap`, PR #73's spec/plan already merged) found the shipped prompt hardening (§4.2.2's original instruction) did not fix the issue's own primary reproduction question — 5/5 confident, incorrect assertions at `temperature: 0`, consistent rather than nondeterministic. Investigated live rather than patching ad hoc: confirmed the retrieved passage isn't actually grammatically ambiguous (single consistent subject throughout); tested a more explicit "trace pronoun referents" instruction, which failed *worse* (5/5, plus the model began misquoting the source text, inserting a word — "opponent's" — that isn't in the actual passage); tested a targeted, single-fact instruction stating the specific rule scope directly instead of asking the model to derive it, which fixed the target case 5/5 with no regression on the already-passing second hedge question or 3 spot-check golden questions (including another handball question, checked specifically for over-hedging). §4.2.2 revised with the full investigation and the new instruction — see §4.2.2.1. This is the fifth review-branch revision cycle this project has now used for a mid-execution finding requiring a real design change rather than a code patch (see this project's spec/plan-revision rule, `CLAUDE.md` → Global conventions). |
