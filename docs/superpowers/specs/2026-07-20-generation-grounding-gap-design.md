@@ -53,6 +53,15 @@ Two layers:
    target of the fix: removing that room, not just reinforcing the
    instruction that already sometimes works.
 
+**Correction (2026-07-21, PR #76 — flagged by fresh Fable review):** this
+theory explains the observed *nondeterminism* at temperature 1.0, but
+does not fully hold for why temperature 0 alone was insufficient — §4.2.2.1
+found that with the *original* prompt wording, the incorrect assertion
+was the deterministic top completion at temperature 0 (5/5 failures), not
+a rare low-probability sample. The honest hedge was not actually the
+higher-probability completion for this specific question under that
+wording — see §4.2.2.1 for the real mechanism and the fix that worked.
+
 ## 3. Goals / Non-goals
 
 **Goals**

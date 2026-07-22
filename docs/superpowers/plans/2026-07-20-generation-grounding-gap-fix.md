@@ -938,6 +938,8 @@ git commit -m "docs: record post-fix generation-grounding verification results (
 
 **Files:**
 - Modify: `lib/answer.ts` (the `SYSTEM_PROMPT` constant's second bullet)
+- Modify: `docs/superpowers/specs/2026-07-20-generation-grounding-gap-design.md`
+  (revision history table only — Steps 6-7)
 
 **Interfaces:** none — the constant's content changes, not its type or usage.
 
