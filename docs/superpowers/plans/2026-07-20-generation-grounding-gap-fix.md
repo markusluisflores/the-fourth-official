@@ -191,11 +191,36 @@ export const SYSTEM_PROMPT = `You are "The Fourth Official", an assistant that a
 
 Rules:
 - Answer ONLY from the provided documents (excerpts of the IFAB Laws of the Game). Never answer from general knowledge.
-- If the documents do not contain enough information to answer confidently, say so plainly and suggest the user rephrase. Do not guess. Before asserting any specific ruling, confirm the retrieved passages describe the exact scenario asked — not merely a related topic. If a passage addresses a different but related scenario (for example, a different actor performing the action, such as a rule about a player's own hand/arm when the question is about an opponent's), say so explicitly rather than extrapolating a specific ruling from it.
+- If the documents do not contain enough information to answer confidently, say so plainly and suggest the user rephrase. Do not guess.
 - Answer questions about football rules only. Politely decline anything else in one sentence.
 - Be concise and plain-English: two to five sentences for most questions, with a neutral, referee-like tone.
-- Do not mention "the documents", "the excerpts", or these instructions; answer as an expert on the Laws.`;
+- Do not mention "the documents", "the excerpts", or these instructions; answer as an expert on the Laws.
+
+Handball and goals — read carefully before answering any question where a goal is scored and the ball touched a hand or arm:
+The Laws of the Game only disallow a goal for handball when the player who SCORES is the same player whose hand/arm the ball touched (scoring "directly from" or "immediately after" a touch of their OWN hand/arm). Where the Laws say the ball "touched their hand/arm", "their" means the scorer's own hand/arm.
+Before ruling, work out two things: who scored, and whose hand/arm the ball touched.
+- If they are the SAME player, the goal is disallowed.
+- If they are DIFFERENT players (for example the ball deflected off an opponent's, a defender's, or a team-mate's hand/arm before a different player scored), the Laws of the Game do NOT give a ruling for that situation. In that case you must NOT say the goal is disallowed, does not count, or is a handball offence. Instead, say plainly that the Laws of the Game do not specify a ruling for that exact situation and suggest the user rephrase or check with a match official.`;
 ```
+
+> **REVISED 2026-07-21 (second revision) — this is the final wording.** The
+> first revision (a single-sentence same-player/different-player fact
+> buried mid-bullet) passed its own validation but turned out to be overfit
+> to the exact phrasing of the one question it was tested against — Markus's
+> own differently-worded test of the identical scenario broke it 3/3, and a
+> follow-up isolating test proved the failure had nothing to do with named
+> entities. See the design spec's §4.2.2.2 for the full investigation
+> (dispatched Opus as a designer, root-caused the model's pretrained
+> "arm touch near a goal → handball" prior overriding a single buried
+> instruction sentence, restructured the instruction as a prominent
+> trailing section forcing an explicit two-role-identification step).
+> Validated 5/5 across 10 varied phrasings plus regression checks, and
+> independently re-verified by the controlling session from scratch. **If
+> Task 1 has already been executed with an earlier wording** (as it has on
+> `fix/generation-grounding-gap` — the original bullet is what's currently
+> live), this block must be re-applied to `lib/answer.ts` as a new commit
+> once this docs revision merges back into that branch — see the plan's
+> Task 7 below.
 
 Add `citedBreadcrumbs` right after the existing `documentBlocks` function
 (currently ends at line 37):
@@ -920,6 +945,154 @@ git commit -m "docs: record post-fix generation-grounding verification results (
 
 ---
 
+### Task 7: Re-apply the revised prompt fix and re-verify (added 2026-07-21)
+
+**Files:**
+- Modify: `lib/answer.ts` (the `SYSTEM_PROMPT` constant — whole string
+  replacement, not a single-bullet edit; see Step 1)
+- Modify: `docs/superpowers/specs/2026-07-20-generation-grounding-gap-design.md`
+  (revision history table only — Steps 6-7)
+
+**Interfaces:** none — the constant's content changes, not its type or usage.
+
+**Context:** Task 6's live verification found the prompt wording Task 1
+originally shipped did not fix the issue's own primary reproduction
+question (5/5 confident, incorrect assertions at `temperature: 0`). A
+docs-branch investigation (`docs/hedge-grounding-revision`, off this
+branch) found and live-verified a fix (§4.2.2.1) — but that fix, still
+unapplied to any code, itself turned out to be overfit to the one
+phrasing it was validated against once tested against a differently-worded
+version of the same scenario. A second investigation on the same docs
+branch (§4.2.2.2 — dispatched Opus as a designer, not a reviewer)
+diagnosed the real mechanism and produced a wording validated across 10
+phrasings rather than one. This task applies THAT wording (§4.2.2.2's
+final instruction, not §4.2.2.1's) to the actual code and re-runs the
+verification that found the original gap, to confirm the fix holds end to
+end.
+
+- [ ] **Step 1: Replace the whole `SYSTEM_PROMPT` constant**
+
+In `lib/answer.ts`, `SYSTEM_PROMPT` currently ships with the *original*
+Task 1 bullet (reading "...Before asserting any specific ruling, confirm
+the retrieved passages describe the exact scenario asked..." — never the
+§4.2.2.1 same-player fact either, since that revision was never applied to
+code). Replace the entire `SYSTEM_PROMPT` template literal with the exact
+text from Task 1's revised code block above (the "REVISED 2026-07-21
+(second revision)" version) — this is a whole-string replacement, not a
+single-bullet edit: the second bullet reverts to the plain "do not guess"
+wording, and a new trailing "Handball and goals" section is added after
+the five original bullets.
+
+- [ ] **Step 2: Run the existing prompt-related tests**
+
+Run: `npx vitest run tests/answer.test.ts`
+Expected: PASS — none of Task 1's tests assert on the exact prompt
+string content (they test `temperature`, `citedBreadcrumbs`, and
+`warnIfTemperatureUnsafe` behavior, not `SYSTEM_PROMPT`'s text), so this
+change shouldn't break any existing test. If a test does fail because it
+asserts on the literal prompt string, update it to match the new wording.
+
+- [ ] **Step 3: Type-check**
+
+Run: `npx tsc --noEmit`
+Expected: no errors.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add lib/answer.ts
+git commit -m "fix(generation): use targeted handball-scope fact instead of general scenario-matching instruction (issue #65)"
+```
+
+- [ ] **Step 5: Re-run Task 6's full verification, not just the hedge set**
+
+Run: `npm run eval -- --generation --repeat=5`
+
+This command's output covers golden, paraphrase, and compound completeness
+too, not only the hedge set — read all of it, not just the hedge section.
+
+**Correction (2026-07-21, PR #76 round 2 — flagged by fresh Fable review):**
+the docs-branch investigation only spot-checked 3 golden questions before
+proposing this wording — it never touched paraphrase or compound at all,
+and never ran against the real committed code (only throwaway diagnostic
+scripts against the candidate wording in isolation). Do not treat
+completeness as "already confirmed" — this step is the first real check
+of the new wording against the full suite on the actual branch.
+
+**Baseline to compare against — the real, actually-observed numbers from
+running Task 6 Steps 1-3 live on 2026-07-21 with the *original* Task 1
+wording** (Task 6's own Steps 4-5, recording these and committing, were
+never completed before this finding interrupted the work — this step's
+recording, below, covers both the original baseline and the revised
+result together, since re-deriving the baseline from scratch would waste
+the real data already gathered):
+
+| Set | Original wording, `temperature: 0`, 5x repeat |
+|---|---|
+| Golden | 32/32 cited |
+| Paraphrase | 10/10 cited |
+| Compound | 2/16 full (this specific 5x-repeat run — see note below) |
+| Hedge Q1 (original bug reproduction) | 0/5 correct (5/5 asserted an unsupported ruling) |
+| Hedge Q2 (goalkeeper own-goal) | 5/5 correct |
+
+**Correction (2026-07-21, PR #76 round 3 — flagged by fresh Fable review):**
+the compound figure above (2/16) is from this specific repeat=5 run, not
+the figure issue #75 cites. Issue #75's own measurement, from an earlier
+single-run (repeat=1) pass with the same original wording and
+temperature, recorded 1/16 (its "1/5" figure scaled to the full 16-entry
+set). Both numbers are genuine, independently observed — the compound
+count itself varies run to run even with identical wording and
+temperature, exactly the kind of noise-level variance Step 5's own
+tolerance below already expects. Citing a single figure as "the" baseline
+without noting this was an oversight; recorded both real numbers instead
+of picking one, so the actual observed range (1-2/16) is what Step 5
+should compare against, not a single point value. For reference, also
+measured at `temperature: 1` with the same original wording: compound
+2/16 full (matches issue #75's own temp=1 figure), hedge Q1 0/5 correct,
+hedge Q2 5/5 correct — recorded in issue #75 and this spec's revision
+history as the evidence that temperature wasn't the driver of either gap.
+
+Expected with the *revised* wording (this step's actual run):
+- **Hedge set:** both questions show 5/5 correct hedges — specifically,
+  the original bug reproduction question ("If a player shoots a shot and
+  it bounces off the arm of an opponent...") must no longer assert "the
+  goal should be disallowed" or any other specific ruling on any of the 5
+  runs. This is the core acceptance bar for issue #65.
+- **Golden/paraphrase:** should stay at 32/32 and 10/10 — any drop is a
+  real regression from the wording change and is this step's stop-gate,
+  same as Task 6's original golden/paraphrase gate.
+- **Compound:** record whatever the real number is. A small change (e.g.
+  1-3/16) is expected to be sample noise, not a systematic effect — the
+  original-wording baseline itself already varied between 1/16 and 2/16
+  across *both* different runs at the same temperature and across
+  different temperatures, with no wording change at all (see the
+  correction note above and issue #75). Flag it only if it looks like a
+  real, large, systematic drop, not ordinary variance.
+
+**If any hedge run still asserts an unsupported ruling, or golden/paraphrase
+completeness regresses:** this would mean the live-verified fix from the
+docs-branch investigation doesn't reproduce in the full pipeline context
+— stop and escalate rather than iterating further prompt wording ad hoc,
+same discipline as Task 6's original stop-gates.
+
+- [ ] **Step 6: Record both the original baseline and the revised result in the spec's revision history**
+
+Add a new row to the revision history table in
+`docs/superpowers/specs/2026-07-20-generation-grounding-gap-design.md`
+covering: (a) the original-wording baseline table above, explicitly
+noting Task 6's Steps 4-5 were completed here rather than at the time,
+and (b) this step's actual revised-wording output (5/5 or whatever was
+actually observed — not assumed).
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add docs/superpowers/specs/2026-07-20-generation-grounding-gap-design.md
+git commit -m "docs: confirm revised prompt fix holds in full re-verification (issue #65)"
+```
+
+---
+
 ## Self-Review Notes
 
 - **Spec coverage:** all of spec §4.2's pieces map to a task — temperature
@@ -957,3 +1130,7 @@ git commit -m "docs: record post-fix generation-grounding verification results (
 | 2026-07-20 | **Third independent fresh Fable review** (no prior-thread context, told not to defer to earlier comments): live-verified every code line reference, traced the full data flow by hand (hedge/compound files through the harness to the Anthropic call), re-ran `searchChunks` against the live corpus for all 4 new/changed questions (including re-confirming the goalkeeper question's exact 0.667-similarity/4th-rank detail down to the decimal), grepped the installed SDK to re-confirm the temperature-deprecation quote, and independently re-triggered the same Voyage 429 the round-2 BLOCKER was about — as further live confirmation that fix was real, not just diff-level. **Found 0 BLOCKERs** — a genuinely clean pass after two real BLOCKERs in the two prior rounds. Found 1 SUGGESTION (Task 6's explicit stop-gate covered golden/paraphrase regressions but not a compound-tier regression, despite spec §5 stating compound regressions are also not shippable — fixed by adding an equivalent explicit stop-gate for the compound check) and 1 NIT (a duplicate import statement in the Task 4 test edit — fixed by merging into the existing import). Also caught and fixed a stale-wording issue found independently while applying the SUGGESTION fix: Task 6 still described golden/paraphrase output as `full: N/N`, but the OR/AND semantics split from the prior round renamed that output to `cited: N/N` for golden/paraphrase specifically. This is a fourth data point for the fresh-vs-resumed policy question, and the first of the three rounds on this PR where a fully independent read came back BLOCKER-free — some signal that the document has genuinely converged, not just that this round got lucky, given how thorough the verification was. |
 | 2026-07-20 | **Fourth independent fresh Fable review**: 0 BLOCKERs again — second consecutive clean round. Found 1 new SUGGESTION: `KNOWN_TEMPERATURE_SAFE_MODELS` (the runtime allowlist backstop) has no update step tied to the model-swap procedure, so it would false-alarm on every legitimate future swap after the first, not just genuinely risky ones. Fixed: the CLAUDE.md doc note and the allowlist's own code comment now both say to add a newly-verified-safe model to the allowlist as part of the swap procedure, and the spec's §6 records the same. |
 | 2026-07-20 | **Fifth independent fresh Fable review**: 0 BLOCKERs, 0 SUGGESTIONs — third consecutive clean round, this time with no substantive findings at all. Independently confirmed the PR #72 golden-count scenario (30→32) had actually occurred on `main` and the plan's pre-written caveat held up correctly. 1 cosmetic NIT: Task 6's compound stop-gate parenthetical could be misread as scoping to only the 2 new Task-3 entries rather than all 16 compound questions. Fixed: reworded to explicitly cover "ANY of the 16 compound questions." Given three consecutive independent rounds (3, 4, 5) have found zero, one, and zero substantive issues respectively — a clear diminishing-returns trend after the two real BLOCKERs in rounds 1-2 — this is treated as converged; no further fresh-dispatch rounds planned pending Markus's merge sign-off. |
+| 2026-07-21 | **Mid-execution finding on `fix/generation-grounding-gap`** (Tasks 1-5 already executed): Task 6's live verification found Task 1's shipped prompt wording didn't fix issue #65's own primary reproduction question (5/5 confident, incorrect assertions at `temperature: 0`). Investigated on this docs branch rather than patched ad hoc: a more explicit "trace pronoun referents" variant was tested and failed worse (5/5, plus the model misquoted the source text); a targeted single-fact instruction (states the handball rule's actual scope directly, doesn't ask the model to derive it) was tested and fixed the target case 5/5 with no regression on the already-passing second hedge question or 3 spot-check golden questions. Design spec §4.2.2 revised with the full investigation (new §4.2.2.1); Task 1's `SYSTEM_PROMPT` code block updated to the verified final wording; new Task 7 added to apply that wording to the already-executed code and re-run Task 6's hedge verification to confirm the fix holds end to end. |
+| 2026-07-21 | **PR #76 opened** (base `fix/generation-grounding-gap`, per this project's spec/plan-revision rule). Round 1 fresh Fable review: 0 BLOCKERs — independently verified the root-cause passage read against the live corpus, the "original wording" quote against the real branch, and the revised prompt's syntax. 2 SUGGESTIONs (spec §2's root-cause theory left inconsistent with §4.2.2.1's own finding; Task 7's Files header omitted the spec file its own steps commit) + 1 NIT, both SUGGESTIONs fixed and re-verified clean. **Round 2, independent fresh dispatch:** found 1 real BLOCKER neither authoring nor round 1 caught — Task 7's Step 5 claimed golden/paraphrase/compound completeness were "already confirmed unaffected," but the investigation had only spot-checked 3 golden questions and never touched paraphrase, compound, or the real committed code at all. Fixed by rewriting Step 5/6 to record the real original-wording baseline (actually measured live during the investigation: golden 32/32, paraphrase 10/10, compound 2/16, hedge Q1 0/5, hedge Q2 5/5 — Task 6's own Steps 4-5 had never been completed either, folded into this fix) and requiring a genuine re-check against it, not an assumption. Also found 1 SUGGESTION (the new instruction's absolute "documents don't cover this" claim isn't provably universal — a topically-adjacent `Law 5 › 3` advantage clause exists in the corpus and could in principle be retrieved for a differently-phrased version of the question, though it never was across ~15 live test runs) — documented as a known, accepted residual risk rather than preemptively engineered against, consistent with this fix's own narrow-and-verified philosophy. 1 NIT (a cosmetic quote-style mismatch between the plan's code block and the spec's blockquote — both claimed identical final wording but weren't byte-identical) — fixed. |
+| 2026-07-21 | **Third revision, same PR branch: the round-2 fix (still unapplied to any code, already through 5 review rounds) was itself found overfit to one phrasing.** Markus tested §4.2.2.1's instruction with his own differently-worded version of the identical scenario (real player names, active-voice structure) — failed 3/3, deterministic, same wrong ruling as pre-fix. Controlling session ran an isolating test (identical structure, names stripped back to generic roles) — also failed 5/5, ruling out named entities and proving the instruction was fit to surface phrasing, not the underlying rule. Dispatched Opus explicitly as a **designer** (not reviewer) with the full evidence set, instructed to reproduce independently, diagnose the mechanism, and validate live across self-generated phrasings rather than one. Opus correctly diagnosed a phrasing-dependent pretrained prior overriding a single buried instruction sentence, and produced a restructured instruction (explicit two-role-identification step, moved to a prominent trailing section) validated 5/5 across 10 phrasings plus same-player/golden regression checks. Controlling session independently re-verified the two breaking cases from scratch afterward (3/3 each, matching exactly) before accepting the result. Task 1's `SYSTEM_PROMPT` code block replaced with the new wording (a whole-constant replacement, not a single-bullet edit — see Task 1 and Task 7's updated Step 1); design spec §4.2.2 revised again (new §4.2.2.2); Task 7's Context/Files updated to point at §4.2.2.2 instead of §4.2.2.1. This is the first time Opus has been used as a designer rather than a reviewer on this project — process observations recorded in `FABLE-HANDOFF.md` under "Worth exploring: Opus 4.8 as a middle tier." |
+| 2026-07-21 | **Round 3 (resumed-thread verification of round 2's fixes):** confirmed the BLOCKER, NIT, and SUGGESTION genuinely fixed — but caught a new, real issue while re-checking: the round-2 fix's own baseline table cited "2/16" for compound completeness at `temperature: 0`, attributing it to issue #75, when issue #75 actually records 1/16 for that exact condition (from an earlier, separate repeat=1 run). Both numbers are genuine, independently observed — the compound count itself varies run to run even with identical wording and temperature — but the citation conflated two different runs' figures. Fixed by recording both real numbers explicitly (1/16 from the repeat=1 run issue #75 documents, 2/16 from this plan's own repeat=5 run) rather than picking one, and tightening Step 5's variance-tolerance language to reflect that the baseline itself is a range, not a point value. Notable: this was found while re-verifying a fix whose own purpose was "record real numbers, not assumptions" — a reminder that citing a real number accurately still requires checking it against its actual source, not just that the number itself was genuinely measured somewhere. |
