@@ -193,6 +193,15 @@ async function runGenerationCompoundSetFiltered(
     `\n[compound — retrieval-complete subset] ${filtered.length}/${compounds.length} ` +
       `questions have full retrieval coverage at k=8; only these are scored below.`,
   );
+  if (filtered.length === 0) {
+    console.log(
+      `\n[compound — retrieval-complete subset, escalation-bar check] INCONCLUSIVE: ` +
+        `no compound questions have full retrieval coverage at k=8 — this indicates a ` +
+        `retrieval regression, not a generation-completeness result. Investigate ` +
+        `retrieval before treating this as a pass.`,
+    );
+    return;
+  }
   let fullOnEveryRepeat = 0;
   for (const c of filtered) {
     let fullCount = 0;
@@ -218,6 +227,16 @@ async function runGenerationCompoundSetFiltered(
   );
 }
 ```
+
+**Fix applied after PR #85 review (fresh Opus dispatch, 2026-07-22):** the
+`if (filtered.length === 0)` early return above wasn't in the originally
+approved plan — added because the escalation bar's `X === N` check
+(Task 3 Step 3) would otherwise pass vacuously on a `0/0` result. See the
+spec's §4.2.5 revision-history entry for the full finding. The reviewer
+also flagged that this function's retrieval (via `retrievalCompleteCompounds`
+above) plus `runGeneration`'s own internal retrieval means `repeat + 1`
+Voyage calls per filtered question — accepted as consistent with this
+file's existing patterns and negligible cost (Voyage-only), not changed.
 
 - [ ] **Step 2: Wire the new section into `main()`'s `--generation` branch**
 
@@ -304,12 +323,13 @@ against the live Supabase/Voyage/Anthropic stack and records the result.
   treated escalation/close decisions.
 
 > ⚠️ **Real cost and time, real API calls — confirm with Markus before
-> running.** This is roughly 200 paid Anthropic (Haiku 4.5) calls
-> (~$1-2 CAD, ~10-20 minutes wall-clock — estimated during this feature's
-> brainstorm and already discussed with Markus, but re-confirm
-> immediately before running rather than assuming the earlier discussion
-> is still an active go-ahead). Do not run this step unattended as part
-> of an unsupervised task chain.
+> running.** This is roughly 100 paid Anthropic (Haiku 4.5) calls (golden
+> 32 + paraphrase 10 + informational compound 16 + filtered subset ~5×3 +
+> hedge 9×3 — corrected 2026-07-22, PR #85 review: the original ~200
+> estimate double-counted), roughly $0.50-1 CAD, ~5-10 minutes wall-clock.
+> Re-confirm with Markus immediately before running rather than assuming
+> an earlier discussion is still an active go-ahead. Do not run this step
+> unattended as part of an unsupervised task chain.
 
 - [ ] **Step 1: Confirm `ANTHROPIC_API_KEY` is set**
 
@@ -344,8 +364,12 @@ From the spec (§5):
   don't chase it in this task.
 - **Escalation-bar check (the decision-gating line):** read the printed
   `full on every repeat: X/N` line from the new section. If `X === N`
-  (every question in the retrieval-complete subset achieved full
-  citation coverage on all 3 repeats), the bar is met.
+  **and `N > 0`** (every question in a non-empty retrieval-complete
+  subset achieved full citation coverage on all 3 repeats), the bar is
+  met. If the section instead printed `INCONCLUSIVE` (added after PR #85
+  review — see Task 2 Step 1), the retrieval-complete subset was empty:
+  treat this as a retrieval regression to investigate, not a passing
+  result, and do not read it as "bar met."
 - Hedge set: manually review each answer against its `[expect: ...]` tag,
   exactly as the existing hedge-set instructions describe — confirm no
   regression from the issue #65 fix (in particular, the same-player

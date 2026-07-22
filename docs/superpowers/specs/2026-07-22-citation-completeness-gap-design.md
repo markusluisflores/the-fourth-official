@@ -146,6 +146,15 @@ tested (`tests/evals.test.ts`) — no new pure function is introduced here,
 this is a thin orchestration wrapper reusing tested logic, same shape as
 its siblings in this file.
 
+**Reviewer note (PR #85, fresh Opus review, 2026-07-22 — accepted, not
+fixed):** `retrievalCompleteCompounds` retrieves once per question to
+compute the filter, and each surviving question is then retrieved *again*
+inside `runGeneration` (§4.2.3) for every repeat — `repeat + 1` retrieval
+calls per filtered question. Consistent with this file's existing
+patterns (`runCompoundSet` already retrieves separately per k), and the
+extra calls are Voyage-only, not the paid Anthropic path — negligible
+cost. Flagged so it's a conscious choice, not an oversight; not changed.
+
 #### 4.2.3 Eval harness — escalation-bar check (new section in `--generation` mode)
 
 A new function, `runGenerationCompoundSetFiltered`, that runs generation
@@ -165,6 +174,15 @@ async function runGenerationCompoundSetFiltered(
     `\n[compound — retrieval-complete subset] ${filtered.length}/${compounds.length} ` +
       `questions have full retrieval coverage at k=8; only these are scored below.`,
   );
+  if (filtered.length === 0) {
+    console.log(
+      `\n[compound — retrieval-complete subset, escalation-bar check] INCONCLUSIVE: ` +
+        `no compound questions have full retrieval coverage at k=8 — this indicates a ` +
+        `retrieval regression, not a generation-completeness result. Investigate ` +
+        `retrieval before treating this as a pass.`,
+    );
+    return;
+  }
   let fullOnEveryRepeat = 0;
   for (const c of filtered) {
     let fullCount = 0;
@@ -234,6 +252,14 @@ check, or accept as a documented limitation) rather than iterating prompt
 wording ad hoc in this same cycle — same discipline as issue #65's Opus
 arc (measure across repeats, don't declare victory on one pass).
 
+**Non-vacuity requirement (added after PR #85 review, 2026-07-22):** the
+bar only counts as "met" when the retrieval-complete subset is non-empty.
+An empty subset (`0/0`) is **inconclusive**, not a pass — it would mean no
+compound question currently achieves full retrieval coverage at k=8,
+which is itself a retrieval regression worth investigating, not evidence
+the generation fix works. §4.2.3's implementation prints an explicit
+`INCONCLUSIVE` message in that case rather than a misleading `0/0`.
+
 ## 5. Testing / Success Criteria
 
 - **Unit tests:** none new — this fix reuses `coverageScore`, already
@@ -261,9 +287,13 @@ arc (measure across repeats, don't declare victory on one pass).
   exists specifically so a partial result becomes a real decision, not a
   declared victory.
 - Eval-run cost/time: the full `--generation --repeat=3` run is
-  approximately 200 paid Anthropic (Haiku 4.5) calls — roughly $1-2 CAD
-  and an estimated 10-20 minutes wall-clock. Confirmed with Markus as
-  acceptable before this spec was finalized.
+  approximately 100 paid Anthropic (Haiku 4.5) calls (golden 32 +
+  paraphrase 10 + informational compound 16 + filtered subset ~5×3 + hedge
+  9×3 — corrected 2026-07-22, PR #85 review: the original estimate of
+  ~200 double-counted) — roughly $0.50-1 CAD and an estimated 5-10 minutes
+  wall-clock. Confirmed with Markus as acceptable before this spec was
+  finalized; the correction only lowers the estimate, so the original
+  go-ahead still holds.
 
 ## Provenance
 
@@ -291,3 +321,4 @@ subset and the existing hedge set), not applied uniformly to the whole
 | Date | Change |
 |---|---|
 | 2026-07-22 | Initial spec — approved in-session after iterative scoping discussion (fix direction vs. issue #77's build-now-vs-defer question; escalation bar definition; dynamic vs. fixed retrieval-complete filtering; making the new check a permanent eval gate; repeat scoping across eval sections; cost estimate for the full repeat=3 verification run). |
+| 2026-07-22 | PR #85 (docs-only, spec+plan) reviewed cold by a fresh Opus dispatch — 0 BLOCKER, 2 SUGGESTION, 1 NIT, all independently verified against the live repo rather than replayed from the docs. Fixed: §4.2.5's escalation bar could pass vacuously on an empty retrieval-complete subset (`0/0`) — added a non-vacuity requirement and an explicit `INCONCLUSIVE` code path in §4.2.3; the ~200-call cost estimate in §6 was corrected to the real ~100 (the original double-counted). Noted, not changed: §4.2.2's redundant per-repeat retrieval call, accepted as consistent with this file's existing patterns and Voyage-only (negligible cost). |
