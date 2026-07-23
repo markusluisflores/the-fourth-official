@@ -311,6 +311,47 @@ the generation fix works. §4.2.3's implementation prints an explicit
   finalized; the correction only lowers the estimate, so the original
   go-ahead still holds.
 
+## 7. Final verification results and closing decision (2026-07-23)
+
+The implemented fix (§4.2.1's prompt, revised once — see the plan's
+revision history for the ENUMERATE wording swap and the final
+`lib/answer.ts` commit) was verified via `npm run eval -- --generation
+--repeat=3` against the final state: the ENUMERATE prompt, 2 corrected
+`required[]` labels (2026-07-23 — two questions were over-specified,
+requiring a citation that was either background the question already
+presupposed or a restatement of the question's own stated premise; both
+narrowed to their single genuinely-necessary citation after live
+verification), and 5 new live-verified compound questions (16 → 21 total
+in `evals/compound-questions.json`, expanding the retrieval-complete
+subset from 5 to 10).
+
+**Result: 8/10 full coverage on every repeat (aggregate pass rate 26/30,
+87%)** — up from the pre-fix baseline of 1/5 (20%). Golden (32/32),
+paraphrase (10/10), and the hedge set (27/27, issue #65's protection)
+all confirmed unchanged, zero regression.
+
+**The escalation bar (§4.2.5: every question, every repeat) is not
+strictly met** — 2 of 10 questions still miss. One is ordinary
+temperature=0 variance on a newly-added borderline question (2/3 passes,
+not a systematic problem). The other is a genuine, fully root-caused
+residual limitation, live-investigated by a dispatched Opus session: for
+the one question needing 3 distinct citations synthesized into a single
+concise answer, Anthropic's native citation-marker mechanism (which only
+attaches a marker where the model closely echoes a document's literal
+wording) caps at roughly 2 literal-echo anchors per concise answer. A
+targeted prompt fix was tested live and confirmed to only *relocate*
+which citation gets dropped, not raise the count — prompt-only hardening
+structurally cannot close this specific case. Full mechanism write-up:
+`evals/compound-questions.json`'s note field for the goalkeeper/no-subs
+question, and issue #90 (filed as the tracked, evidence-backed case for
+the deferred post-generation completeness check named in §4.1).
+
+**Closing decision (Markus, 2026-07-23):** accept the 8/10 (87% aggregate)
+result and this one residual limitation as documented, not a blocker.
+Close issue #75 at this state rather than building the heavier
+post-generation architecture now — that remains a real, deliberate future
+decision (issue #90), not something to fold into this fix's tail end.
+
 ## Provenance
 
 Found during issue #65's Task 6 verification (2026-07-21), while
@@ -339,3 +380,4 @@ subset and the existing hedge set), not applied uniformly to the whole
 | 2026-07-22 | Initial spec — approved in-session after iterative scoping discussion (fix direction vs. issue #77's build-now-vs-defer question; escalation bar definition; dynamic vs. fixed retrieval-complete filtering; making the new check a permanent eval gate; repeat scoping across eval sections; cost estimate for the full repeat=3 verification run). |
 | 2026-07-22 | PR #85 (docs-only, spec+plan) reviewed cold by a fresh Opus dispatch — 0 BLOCKER, 2 SUGGESTION, 1 NIT, all independently verified against the live repo rather than replayed from the docs. Fixed: §4.2.5's escalation bar could pass vacuously on an empty retrieval-complete subset (`0/0`) — added a non-vacuity requirement and an explicit `INCONCLUSIVE` code path in §4.2.3; the ~200-call cost estimate in §6 was corrected to the real ~100 (the original double-counted). Noted, not changed: §4.2.2's redundant per-repeat retrieval call, accepted as consistent with this file's existing patterns and Voyage-only (negligible cost). |
 | 2026-07-22 | PR #85 reviewed a second time by a genuinely fresh, independent Opus dispatch (no knowledge of the first round) — 0 BLOCKER, 2 more SUGGESTIONs, 1 more NIT, none overlapping the first round's findings. Fixed: §4.2.3's escalation-bar check was strict all-or-nothing with no gradient — added `totalRuns`/`totalFull` aggregate pass-rate tracking alongside the strict bar; the two doc-comments on `retrievalCompleteCompounds` (this file vs. the plan) weren't byte-identical as the first round claimed — synced. Noted, not changed: the new Completeness section's "provided document" wording vs. Rule 5's "don't mention the documents" — accepted as consistent with Rules 1-2's existing use of the same vocabulary (§4.2.1). |
+| 2026-07-23 | PR #85 merged; implementation executed via `subagent-driven-development` on `fix/citation-completeness-gap` (Tasks 1-2 approved clean, 0 findings each). Task 3's live verification found the shipped Completeness prompt insufficient (escalation bar stayed at 1/5) — investigated by a dispatched Opus design consultation rather than iterating prompt wording ad hoc: found 2 of the 5 questions were mislabeled (over-specified `required[]`, corrected), and that a more structurally-isolated "forced enumeration" prompt (§4.2.1's wording replaced) measurably outperformed the original. Expanded the retrieval-complete subset from 5 to 10 via 5 new live-verified questions (`evals/compound-questions.json`, 16 → 21 entries). Final verification: 8/10 full coverage on every repeat (87% aggregate), up from 1/5 (20%). The one remaining genuine failure was root-caused by a second Opus dispatch (§7) — a structural citation-marker limitation, not a prompt problem — and filed as issue #90 rather than chased with more prompt tuning. Filed issue #89 (decomposed-retrieval generation testing, a related but distinct out-of-scope idea found mid-investigation). Closed at this state per Markus's explicit decision (§7). |

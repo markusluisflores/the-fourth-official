@@ -7,7 +7,7 @@
   {
     "question": "Can a team keep playing if their goalkeeper is sent off and they have no substitutes left?",
     "required": ["Law 3 › 1", "Law 3 › 4"],
-    "note": "Needs the minimum-players rule AND the outfield-player-becomes-goalkeeper procedure."
+    "note": "Needs the minimum-players rule AND the outfield-player-becomes-goalkeeper procedure. KNOWN RESIDUAL LIMITATION (issue #75, 2026-07-23, live-investigated by Opus, not fixed): the model's prose answer is consistently correct and complete, but its citation marker for the 'who plays goalkeeper now' fact consistently lands on Law 10 › 3 (an off-context penalty-shoot-out rule that happens to share the literal phrase 'a goalkeeper who is sent off must be replaced') instead of Law 3 › 4, because Anthropic's native citation markers only attach where the model closely echoes a document's literal wording, and this question's fully-correct answer needs 3 sections (Law 3 › 1, Law 3 › 4, and arguably Law 3 › 6) synthesized into one concise answer that can only literally echo about 2. A targeted prompt fix was tested live and confirmed to only relocate which citation gets dropped, not raise the count — prompt-only hardening cannot close this case. See docs/superpowers/specs/2026-07-22-citation-completeness-gap-design.md §7 and issue #90 for the deferred structural fix (a post-generation completeness check) this is evidence for."
   },
   {
     "question": "A defender deliberately punches the ball off the goal line to stop a goal — what happens?",
