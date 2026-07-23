@@ -203,6 +203,8 @@ async function runGenerationCompoundSetFiltered(
     return;
   }
   let fullOnEveryRepeat = 0;
+  let totalRuns = 0;
+  let totalFull = 0;
   for (const c of filtered) {
     let fullCount = 0;
     for (let i = 1; i <= repeat; i++) {
@@ -219,13 +221,33 @@ async function runGenerationCompoundSetFiltered(
       if (missed.length > 0) console.log(`    not cited: ${missed.join(" | ")}`);
     }
     if (fullCount === repeat) fullOnEveryRepeat += 1;
+    totalRuns += repeat;
+    totalFull += fullCount;
   }
   console.log(
     `\n[compound — retrieval-complete subset, escalation-bar check, ` +
       `temperature=${temperature}, repeat=${repeat}] full on every repeat: ` +
-      `${fullOnEveryRepeat}/${filtered.length}`,
+      `${fullOnEveryRepeat}/${filtered.length}  ` +
+      `(aggregate pass rate across all runs: ${totalFull}/${totalRuns})`,
   );
 }
+
+**Second fix applied after PR #85's second review round (fresh Opus retry,
+2026-07-22):** added `totalRuns`/`totalFull` aggregate tracking above —
+the original strict `fullOnEveryRepeat` count is all-or-nothing per
+question, so a fix that helps substantially but doesn't reach 100%
+consistency on every single question would look identical to zero
+improvement. The aggregate pass-rate line gives spec §4.2.5's escalation
+decision a gradient to read alongside the strict bar, not just a binary.
+Two more findings from that same round, noted but not changed: the new
+Completeness prompt section's "provided document" wording sits in mild
+tension with `SYSTEM_PROMPT`'s existing Rule 5 ("don't mention 'the
+documents'") — accepted as consistent with how Rules 1-2 already use
+"documents" as instruction-level vocabulary without it leaking into
+answers, not a new risk this fix introduces; and a NIT correcting the
+prior round's "byte-identical" claim about the two doc-comments (the
+executable code matches exactly, the comments had one small wording
+difference, since synced).
 ```
 
 **Fix applied after PR #85 review (fresh Opus dispatch, 2026-07-22):** the

@@ -116,6 +116,15 @@ issue's spec) — a distinction stated as a single buried sentence lost a
 moving it to a prominent, explicit trailing section held up across many
 phrasings. Applying the same lesson here rather than re-learning it.
 
+**Reviewer note (PR #85, second fresh Opus round, 2026-07-22 — accepted,
+not fixed):** this section's "provided document" wording sits in mild
+tension with `SYSTEM_PROMPT`'s existing Rule 5 ("do not mention 'the
+documents', 'the excerpts', or these instructions"). Accepted as
+consistent with existing convention rather than a new risk: Rules 1-2
+already use "documents" as instruction-level vocabulary the same way, and
+neither has been observed leaking into actual model output — this section
+follows the same established pattern, not a new exposure.
+
 #### 4.2.2 Eval harness — retrieval-complete filter (new, `evals/run-evals.ts`)
 
 A new async orchestration function, following this file's existing
@@ -127,8 +136,10 @@ they require the real Voyage API):
 // Returns only the compound questions whose retrieval at k=8 already
 // achieves full required-section coverage — isolates the generation-
 // completeness signal (issue #75) from the separate, already-known
-// retrieval-depth limitation. Computed fresh each run (not a hardcoded
-// list) so the filter doesn't go stale if retrieval changes later.
+// retrieval-depth limitation (some compound questions never reach full
+// retrieval coverage at k=8, which is a different problem this eval
+// section doesn't test). Computed fresh each run, not a hardcoded list,
+// so the filter doesn't go stale if retrieval changes later.
 async function retrievalCompleteCompounds(
   compounds: CompoundQuestion[],
 ): Promise<CompoundQuestion[]> {
@@ -184,6 +195,8 @@ async function runGenerationCompoundSetFiltered(
     return;
   }
   let fullOnEveryRepeat = 0;
+  let totalRuns = 0;
+  let totalFull = 0;
   for (const c of filtered) {
     let fullCount = 0;
     for (let i = 1; i <= repeat; i++) {
@@ -200,11 +213,14 @@ async function runGenerationCompoundSetFiltered(
       if (missed.length > 0) console.log(`    not cited: ${missed.join(" | ")}`);
     }
     if (fullCount === repeat) fullOnEveryRepeat += 1;
+    totalRuns += repeat;
+    totalFull += fullCount;
   }
   console.log(
     `\n[compound — retrieval-complete subset, escalation-bar check, ` +
       `temperature=${temperature}, repeat=${repeat}] full on every repeat: ` +
-      `${fullOnEveryRepeat}/${filtered.length}`,
+      `${fullOnEveryRepeat}/${filtered.length}  ` +
+      `(aggregate pass rate across all runs: ${totalFull}/${totalRuns})`,
   );
 }
 ```
@@ -322,3 +338,4 @@ subset and the existing hedge set), not applied uniformly to the whole
 |---|---|
 | 2026-07-22 | Initial spec — approved in-session after iterative scoping discussion (fix direction vs. issue #77's build-now-vs-defer question; escalation bar definition; dynamic vs. fixed retrieval-complete filtering; making the new check a permanent eval gate; repeat scoping across eval sections; cost estimate for the full repeat=3 verification run). |
 | 2026-07-22 | PR #85 (docs-only, spec+plan) reviewed cold by a fresh Opus dispatch — 0 BLOCKER, 2 SUGGESTION, 1 NIT, all independently verified against the live repo rather than replayed from the docs. Fixed: §4.2.5's escalation bar could pass vacuously on an empty retrieval-complete subset (`0/0`) — added a non-vacuity requirement and an explicit `INCONCLUSIVE` code path in §4.2.3; the ~200-call cost estimate in §6 was corrected to the real ~100 (the original double-counted). Noted, not changed: §4.2.2's redundant per-repeat retrieval call, accepted as consistent with this file's existing patterns and Voyage-only (negligible cost). |
+| 2026-07-22 | PR #85 reviewed a second time by a genuinely fresh, independent Opus dispatch (no knowledge of the first round) — 0 BLOCKER, 2 more SUGGESTIONs, 1 more NIT, none overlapping the first round's findings. Fixed: §4.2.3's escalation-bar check was strict all-or-nothing with no gradient — added `totalRuns`/`totalFull` aggregate pass-rate tracking alongside the strict bar; the two doc-comments on `retrievalCompleteCompounds` (this file vs. the plan) weren't byte-identical as the first round claimed — synced. Noted, not changed: the new Completeness section's "provided document" wording vs. Rule 5's "don't mention the documents" — accepted as consistent with Rules 1-2's existing use of the same vocabulary (§4.2.1). |
