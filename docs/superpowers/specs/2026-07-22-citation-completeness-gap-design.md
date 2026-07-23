@@ -91,7 +91,9 @@ setting reliably prevents, and not a regression from issue #65's
 
 ### 4.2 Chosen approach
 
-#### 4.2.1 Prompt hardening (`lib/answer.ts`)
+#### 4.2.1 Prompt hardening (`lib/answer.ts`) — revised 2026-07-23, see §4.2.1.2 for the shipped wording; §4.2.1.1 is superseded but kept for the investigation trail
+
+##### 4.2.1.1 Original instruction (SUPERSEDED — measured insufficient, see §7)
 
 New trailing section in `SYSTEM_PROMPT`, after the existing "Handball and
 goals" section:
@@ -124,6 +126,43 @@ consistent with existing convention rather than a new risk: Rules 1-2
 already use "documents" as instruction-level vocabulary the same way, and
 neither has been observed leaking into actual model output — this section
 follows the same established pattern, not a new exposure.
+
+**This did not fix the gap.** Task 3's first live verification (§7) found
+the escalation bar stayed at 1/5 with this wording live — the same
+"buried general instruction loses to the model's defaults" failure shape
+this section's own rationale above was trying to avoid. A dispatched Opus
+design consultation investigated live and produced the replacement below.
+
+##### 4.2.1.2 Final instruction (SHIPPED — `lib/answer.ts`, current)
+
+Replaces §4.2.1.1's trailing section in full:
+
+> Covering every relevant rule — do this before writing your answer:
+> First, silently identify every provided document that is relevant to
+> any part of the question — including any document that supplies a rule
+> the question depends on, not only the single document that most
+> directly answers it. If two or more documents are relevant, your answer
+> must draw on and cite each of them. Do not settle for the one that most
+> obviously answers the question when another provided document adds a
+> rule that also applies.
+
+**Why this version held up where §4.2.1.1 didn't:** forces an explicit
+enumeration *step* before answering, rather than stating completeness as
+a property to keep in mind — the same structural lesson §4.2.1.1 already
+cited from issue #65 (dedicated, prominent, explicit-step instructions
+beat general ones), applied more literally this time. Validated live by
+the Opus design consultation (§7): measurably outperformed both the
+original wording and no completeness instruction at all on the same 5
+questions, with no regression on the hedge set (issue #65's protection)
+or golden set. The full escalation-bar verification against this final
+wording, plus the corrected `required[]` labels and expanded question
+set, is recorded in §7.
+
+**Reviewer note (PR #85, second fresh Opus round, 2026-07-22) still
+applies unchanged to this wording** — the "provided document" phrasing
+carries the same accepted, not-a-new-risk tension with Rule 5 discussed
+above; not re-litigated here since nothing about that specific tradeoff
+changed between the two wordings.
 
 #### 4.2.2 Eval harness — retrieval-complete filter (new, `evals/run-evals.ts`)
 

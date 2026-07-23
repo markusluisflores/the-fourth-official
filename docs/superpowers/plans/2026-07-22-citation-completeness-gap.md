@@ -131,6 +131,15 @@ EOF
 )"
 ```
 
+**Superseded 2026-07-23 — this task's wording did not hold up.** Task 3's
+live verification found this exact prompt insufficient (escalation bar
+stayed at 1/5). It was replaced with a different, better-performing
+wording after a dispatched Opus design consultation. The historical task
+text above is preserved as originally written and executed; **the actual
+shipped prompt is in `lib/answer.ts` and recorded in the spec's §4.2.1.2**
+— do not treat the Step 2 code block above as the current source of
+truth for what `SYSTEM_PROMPT` actually contains.
+
 ---
 
 ### Task 2: Eval harness — retrieval-complete filter + escalation-bar check
