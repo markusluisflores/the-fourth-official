@@ -233,6 +233,78 @@ async function runGenerationCompoundSet(
   );
 }
 
+// Returns only the compound questions whose retrieval at k=8 already
+// achieves full required-section coverage — isolates the generation-
+// completeness signal (issue #75) from the separate, already-known
+// retrieval-depth limitation (some compound questions never reach full
+// retrieval coverage at k=8, which is a different problem this eval
+// section doesn't test). Computed fresh each run, not a hardcoded list,
+// so the filter doesn't go stale if retrieval changes later.
+async function retrievalCompleteCompounds(
+  compounds: CompoundQuestion[],
+): Promise<CompoundQuestion[]> {
+  const complete: CompoundQuestion[] = [];
+  for (const c of compounds) {
+    const { chunks } = await withVoyageRetry(() => searchChunks(c.question, 8));
+    if (coverageScore(chunks, c.required).missed.length === 0) complete.push(c);
+  }
+  return complete;
+}
+
+// The decision-gating check for issue #75: on the retrieval-complete
+// subset above, does generation cite every required section on EVERY
+// repeat, not just one lucky pass? See
+// docs/superpowers/specs/2026-07-22-citation-completeness-gap-design.md
+// §4.2.5 for what to do with the result.
+async function runGenerationCompoundSetFiltered(
+  compounds: CompoundQuestion[],
+  temperature: number,
+  repeat: number,
+): Promise<void> {
+  const filtered = await retrievalCompleteCompounds(compounds);
+  console.log(
+    `\n[compound — retrieval-complete subset] ${filtered.length}/${compounds.length} ` +
+      `questions have full retrieval coverage at k=8; only these are scored below.`,
+  );
+  if (filtered.length === 0) {
+    console.log(
+      `\n[compound — retrieval-complete subset, escalation-bar check] INCONCLUSIVE: ` +
+        `no compound questions have full retrieval coverage at k=8 — this indicates a ` +
+        `retrieval regression, not a generation-completeness result. Investigate ` +
+        `retrieval before treating this as a pass.`,
+    );
+    return;
+  }
+  let fullOnEveryRepeat = 0;
+  let totalRuns = 0;
+  let totalFull = 0;
+  for (const c of filtered) {
+    let fullCount = 0;
+    for (let i = 1; i <= repeat; i++) {
+      const { citedBreadcrumbs } = await runGeneration(c.question, 8, temperature);
+      const { missed } = coverageScore(
+        citedBreadcrumbs.map((breadcrumb) => ({ breadcrumb })),
+        c.required,
+      );
+      if (missed.length === 0) fullCount += 1;
+      console.log(
+        `  run ${i}/${repeat}: ${missed.length === 0 ? "FULL " : "MISS "} ` +
+          `${c.required.length - missed.length}/${c.required.length}  ${c.question}`,
+      );
+      if (missed.length > 0) console.log(`    not cited: ${missed.join(" | ")}`);
+    }
+    if (fullCount === repeat) fullOnEveryRepeat += 1;
+    totalRuns += repeat;
+    totalFull += fullCount;
+  }
+  console.log(
+    `\n[compound — retrieval-complete subset, escalation-bar check, ` +
+      `temperature=${temperature}, repeat=${repeat}] full on every repeat: ` +
+      `${fullOnEveryRepeat}/${filtered.length}  ` +
+      `(aggregate pass rate across all runs: ${totalFull}/${totalRuns})`,
+  );
+}
+
 async function runHedgeSet(
   hedges: HedgeQuestion[],
   temperature: number,
@@ -296,6 +368,11 @@ async function main() {
 
     console.log("\n=== Compound set — generation completeness (AND-semantics) ===");
     await runGenerationCompoundSet(compounds, temperature);
+
+    console.log(
+      "\n=== Compound set — generation completeness, retrieval-complete subset (escalation-bar check) ===",
+    );
+    await runGenerationCompoundSetFiltered(compounds, temperature, repeat);
 
     console.log("\n=== Hedge set — MANUAL REVIEW REQUIRED (not automated pass/fail) ===");
     await runHedgeSet(hedges, temperature, repeat);
