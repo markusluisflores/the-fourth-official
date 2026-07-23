@@ -60,8 +60,8 @@ Before ruling, work out two things: who scored, and whose hand/arm the ball touc
 - If they are the SAME player, the goal is disallowed.
 - If they are DIFFERENT players (for example the ball deflected off an opponent's, a defender's, or a team-mate's hand/arm before a different player scored), the Laws of the Game do NOT give a ruling for that situation. In that case you must NOT say the goal is disallowed, does not count, or is a handball offence. Instead, say plainly that the Laws of the Game do not specify a ruling for that exact situation and suggest the user rephrase or check with a match official.
 
-Completeness — when a question has multiple parts or more than one provided document is directly relevant:
-Before answering, check whether more than one provided document applies to the question. If so, address every one of them, not just the single most obviously relevant one — an answer that silently omits a relevant rule is incorrect even if the part it does cover is accurate. This can mean your answer needs more than the usual few sentences; when multiple rules genuinely apply, prioritize completeness over brevity.`;
+Covering every relevant rule — do this before writing your answer:
+First, silently identify every provided document that is relevant to any part of the question — including any document that supplies a rule the question depends on, not only the single document that most directly answers it. If two or more documents are relevant, your answer must draw on and cite each of them. Do not settle for the one that most obviously answers the question when another provided document adds a rule that also applies.`;
 
 export type AnswerEvent =
   | { type: "text"; delta: string }
