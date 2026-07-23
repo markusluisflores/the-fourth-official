@@ -231,6 +231,7 @@ async function runGenerationCompoundSetFiltered(
       `(aggregate pass rate across all runs: ${totalFull}/${totalRuns})`,
   );
 }
+```
 
 **Second fix applied after PR #85's second review round (fresh Opus retry,
 2026-07-22):** added `totalRuns`/`totalFull` aggregate tracking above —
@@ -248,7 +249,13 @@ answers, not a new risk this fix introduces; and a NIT correcting the
 prior round's "byte-identical" claim about the two doc-comments (the
 executable code matches exactly, the comments had one small wording
 difference, since synced).
-```
+
+**Third fix applied during Task 2's implementation (2026-07-23):** this
+paragraph itself was sitting inside the unclosed code fence above until
+the implementer flagged it as a concern — the closing ` ``` ` had been
+left after this prose instead of right after the function's closing
+brace. Moved the fence to close immediately after the code; no code
+content changed, markdown-authoring fix only.
 
 **Fix applied after PR #85 review (fresh Opus dispatch, 2026-07-22):** the
 `if (filtered.length === 0)` early return above wasn't in the originally
