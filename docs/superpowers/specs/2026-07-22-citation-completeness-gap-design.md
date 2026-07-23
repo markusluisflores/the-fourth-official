@@ -60,6 +60,13 @@ setting reliably prevents, and not a regression from issue #65's
   breadcrumbs against retrieved breadcrumbs, prompt a continuation if
   something salient was dropped) — not built in this iteration.
 - Expanding `evals/compound-questions.json` beyond its existing 16 entries.
+  **Revised during execution (2026-07-23) — see §7:** the retrieval-complete
+  subset (5 questions) proved too small to trust the escalation-bar result;
+  5 new live-verified questions were added (16 → 21) specifically to grow
+  that subset from 5 to 10. Still data-only, no product-code scope change —
+  the non-goal held for the reason it was written (don't expand the
+  question set casually), the actual expansion was a deliberate,
+  Markus-approved exception once the original scope proved insufficient.
 - The separate retrieval-depth limitation (compound questions that never
   reach full coverage at k=8 regardless of generation) — issue
   #78-adjacent territory, not this issue.
@@ -265,8 +272,9 @@ async function runGenerationCompoundSetFiltered(
 ```
 
 Wired into `main()`'s `--generation` branch as a new, separately-labeled
-section, after the existing (unchanged) all-16-questions informational
-compound section:
+section, after the existing (unchanged) informational compound section
+(16 questions at the time this was written; 21 after the 2026-07-23
+expansion — see §7):
 
 ```ts
 console.log("\n=== Compound set — generation completeness, retrieval-complete subset (escalation-bar check) ===");
@@ -341,14 +349,18 @@ the generation fix works. §4.2.3's implementation prints an explicit
   variability, not a structural guarantee. §4.2.5's escalation procedure
   exists specifically so a partial result becomes a real decision, not a
   declared victory.
-- Eval-run cost/time: the full `--generation --repeat=3` run is
-  approximately 100 paid Anthropic (Haiku 4.5) calls (golden 32 +
-  paraphrase 10 + informational compound 16 + filtered subset ~5×3 + hedge
-  9×3 — corrected 2026-07-22, PR #85 review: the original estimate of
-  ~200 double-counted) — roughly $0.50-1 CAD and an estimated 5-10 minutes
-  wall-clock. Confirmed with Markus as acceptable before this spec was
-  finalized; the correction only lowers the estimate, so the original
-  go-ahead still holds.
+- Eval-run cost/time: at spec-finalization time, the full
+  `--generation --repeat=3` run was estimated at approximately 100 paid
+  Anthropic (Haiku 4.5) calls (golden 32 + paraphrase 10 + informational
+  compound 16 + filtered subset ~5×3 + hedge 9×3 — corrected 2026-07-22,
+  PR #85 review: the original estimate of ~200 double-counted). Confirmed
+  with Markus as acceptable before this spec was finalized. **Now
+  historical, not current:** after the 2026-07-23 question-set expansion
+  (§7: 16 → 21 entries, filtered subset 5 → 10), the real per-run count
+  grew to roughly 21 + 10×3 + 32 + 10 + 27 ≈ 120 calls — still the same
+  cost/time order of magnitude ($0.50-1 CAD, 5-10 minutes), just not the
+  exact breakdown enumerated above. Markus separately confirmed the
+  expanded run before it was actually executed (§7).
 
 ## 7. Final verification results and closing decision (2026-07-23)
 

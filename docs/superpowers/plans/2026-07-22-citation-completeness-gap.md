@@ -8,7 +8,11 @@ permanent eval gate that measures whether the fix actually holds — and stop
 at a clear decision point rather than iterating prompt wording ad hoc.
 
 **Architecture:** Two independent, additive changes: (1) a new trailing
-"Completeness" section appended to `SYSTEM_PROMPT` in `lib/answer.ts`; (2) a
+"Covering every relevant rule" section appended to `SYSTEM_PROMPT` in
+`lib/answer.ts` (this project's own final wording, revised once during
+execution — see the spec's §4.2.1.2 and revision history; the plan's Task 1
+below still shows the originally-drafted "Completeness" wording as the
+historical record of what was executed first); (2) a
 new async filter + a new `--generation`-mode section in `evals/run-evals.ts`
 that isolates the generation-completeness signal from the separate,
 already-known retrieval-depth limitation, and threads the existing
@@ -361,13 +365,17 @@ against the live Supabase/Voyage/Anthropic stack and records the result.
   treated escalation/close decisions.
 
 > ⚠️ **Real cost and time, real API calls — confirm with Markus before
-> running.** This is roughly 100 paid Anthropic (Haiku 4.5) calls (golden
-> 32 + paraphrase 10 + informational compound 16 + filtered subset ~5×3 +
-> hedge 9×3 — corrected 2026-07-22, PR #85 review: the original ~200
-> estimate double-counted), roughly $0.50-1 CAD, ~5-10 minutes wall-clock.
-> Re-confirm with Markus immediately before running rather than assuming
-> an earlier discussion is still an active go-ahead. Do not run this step
-> unattended as part of an unsupervised task chain.
+> running.** At plan-authoring time this was estimated at roughly 100 paid
+> Anthropic (Haiku 4.5) calls (golden 32 + paraphrase 10 + informational
+> compound 16 + filtered subset ~5×3 + hedge 9×3 — corrected 2026-07-22,
+> PR #85 review: the original ~200 estimate double-counted), roughly
+> $0.50-1 CAD, ~5-10 minutes wall-clock. **Superseded 2026-07-23:** the
+> question set grew during execution (16 → 21 entries, filtered subset
+> 5 → 10 — see the spec's §7), so the real final run was closer to ~120
+> calls, same order of magnitude. Re-confirm with Markus immediately
+> before running rather than assuming an earlier discussion is still an
+> active go-ahead. Do not run this step unattended as part of an
+> unsupervised task chain.
 
 - [ ] **Step 1: Confirm `ANTHROPIC_API_KEY` is set**
 
@@ -382,8 +390,9 @@ that precede the `--generation` branch's own guard).
 Run: `npm run eval -- --generation --repeat=3`
 
 This runs, in order: golden (32 questions, 1 pass each), paraphrase (10
-questions, 1 pass each), the existing informational compound tier (16
-questions, 1 pass each), the new escalation-bar subset from Task 2 (only
+questions, 1 pass each), the informational compound tier (16 questions at
+plan-authoring time; 21 after the 2026-07-23 expansion — see spec §7, 1
+pass each), the new escalation-bar subset from Task 2 (only
 the retrieval-complete questions, 3 passes each), and the hedge set (9
 questions, 3 passes each — issue #65's regression suite).
 
