@@ -78,5 +78,30 @@
     "question": "If a player who is already on a yellow card receives a second caution later in the same match and is sent off, can their team substitute another player in to replace them?",
     "required": ["Law 3 › 6"],
     "note": "Narrowed 2026-07-23 (issue #75 investigation): originally required Law 12 › 4 too, but the question already states as a given premise that the player 'is sent off' — citing the rule that two cautions cause a sending-off just restates what the user already told us. Law 3 › 6 alone directly and completely answers 'can they be replaced' (no). Live-verified: the model's answer citing only Law 3 › 6 is correct and complete, not incomplete. Originally added issue #65 (generation-grounding fix) as a generation-completeness test case, verified against the live corpus 2026-07-20."
+  },
+  {
+    "question": "If a goalkeeper illegally handles a back-pass from a teammate inside their own goal area, is it an indirect free kick, and where exactly on the pitch is that free kick taken from?",
+    "required": ["Law 12 › 2", "Law 13 › 2"],
+    "note": "Genuine two-section question. Law 12 › 2 gives the restart TYPE (an indirect free kick for a goalkeeper handling a deliberate back-pass); WHERE it is taken — the nearest point on the goal area line, because the offence is inside the goal area — lives only in Law 13 › 2. A complete answer needs both facts, from two different laws. Added 2026-07-23 (issue #75); live-verified against the corpus: both sections appear in searchChunks(q,8) and generation cited both on all 3 temperature-0 runs. Constructed plausible scenario grounded in genuine football knowledge, not a specific sourced real incident."
+  },
+  {
+    "question": "Can a substitution be made while the ball is still in play, and what happens if the substitute steps onto the field before the player being replaced has left it?",
+    "required": ["Law 3 › 3", "Law 3 › 5"],
+    "note": "Genuine two-section question. Law 3 › 3 answers whether a substitution can be made in open play (no — the substitute may enter only during a stoppage, at the halfway line, after the replaced player has left and on the referee's signal); the sanction for entering early — caution plus an indirect free kick — is only in Law 3 › 5's 'for any other offences' clause. Added 2026-07-23 (issue #75); live-verified: both sections in the top-8 and both cited on all 3 temperature-0 runs. Constructed plausible scenario, not a specific sourced real incident."
+  },
+  {
+    "question": "A player taking a throw-in lifts one foot off the ground and also releases the ball from behind their head — is that a legal throw-in, and what is the restart if it is illegal?",
+    "required": ["Law 15 › 1"],
+    "note": "'Don't over-cite' test (the failure mode behind today's two corrections). The phrasing sounds compound (is it legal AND what is the restart), but BOTH answers live in Law 15 › 1 — the procedure section itself ends with 'If the throw-in is not taken correctly, it is retaken by the opposing team.' Law 15 › 2 covers only OTHER throw-in offences (second touch, handball, opponent distraction), none of which a foul throw is. Added 2026-07-23 (issue #75); live-verified: an initial hypothesis of Law 15 › 1 + Law 15 › 2 was disproven when the model cited only Law 15 › 1 on all 3 temperature-0 runs and was correct and complete — requiring Law 15 › 2 would mark a correct answer wrong. Constructed plausible scenario, not a specific sourced real incident."
+  },
+  {
+    "question": "Can an attacker be caught offside directly from a corner kick, and can they be caught offside directly from a throw-in?",
+    "required": ["Law 11 › 3"],
+    "note": "'Don't over-cite' test. The phrasing references two restart types (corner and throw-in), but a single section — Law 11 › 3 ('There is no offside offence if a player receives the ball directly from a goal kick, a throw-in, a corner kick') — answers both at once. Added 2026-07-23 (issue #75); live-verified: model cited only Law 11 › 3 on all 3 temperature-0 runs, correctly answering both halves. Constructed plausible scenario, not a specific sourced real incident."
+  },
+  {
+    "question": "During a penalty shoot-out, do the kicks have to alternate between the two teams, and must every eligible player take a kick before any player can take a second one?",
+    "required": ["Law 10 › 3"],
+    "note": "'Don't over-cite' test. Two-part phrasing (do kicks alternate AND must all eligible players kick before anyone goes twice), but both rules sit in the same Law 10 › 3 shoot-out section ('The kicks are taken alternately by the teams' / 'all eligible players must take a kick before any player can take a second kick'). Added 2026-07-23 (issue #75); live-verified: model cited only Law 10 › 3 on all 3 temperature-0 runs. Constructed plausible scenario, not a specific sourced real incident."
   }
 ]
