@@ -47,8 +47,9 @@ setting reliably prevents, and not a regression from issue #65's
    hardening, but for completeness instead of over-claiming.
 2. Add a repeatable eval gate that isolates the generation-completeness
    signal from the separate, already-known retrieval-depth limitation (11
-   of the 16 compound questions don't even reach full retrieval coverage
-   at k=8 — a pre-existing, informational-only gap).
+   of the 16 compound questions in the corpus at the time this goal was
+   written — 21 after the 2026-07-23 expansion, see §7 — don't even reach
+   full retrieval coverage at k=8, a pre-existing, informational-only gap).
 3. Decide, from measured data, whether prompt hardening alone is
    sufficient or whether the heavier post-generation completeness-check
    architecture needs to be designed — not decide this speculatively.
@@ -383,8 +384,13 @@ all confirmed unchanged, zero regression.
 
 **The escalation bar (§4.2.5: every question, every repeat) is not
 strictly met** — 2 of 10 questions still miss. One is ordinary
-temperature=0 variance on a newly-added borderline question (2/3 passes,
-not a systematic problem). The other is a genuine, fully root-caused
+temperature=0 variance on the newly-added *"Can a substitution be made
+while the ball is still in play..."* question (2/3 passes, missing
+`Law 3 › 5` on one run — see its `compound-questions.json` note for the
+correction to its own authoring-time "3/3" claim, which held during
+authoring but not on this larger final run; not a systematic problem or
+a `required[]` labeling issue, both sections are genuinely necessary and
+retrieved). The other is a genuine, fully root-caused
 residual limitation, live-investigated by a dispatched Opus session: for
 the one question needing 3 distinct citations synthesized into a single
 concise answer, Anthropic's native citation-marker mechanism (which only
