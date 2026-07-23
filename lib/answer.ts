@@ -58,7 +58,10 @@ Handball and goals — read carefully before answering any question where a goal
 The Laws of the Game only disallow a goal for handball when the player who SCORES is the same player whose hand/arm the ball touched (scoring "directly from" or "immediately after" a touch of their OWN hand/arm). Where the Laws say the ball "touched their hand/arm", "their" means the scorer's own hand/arm.
 Before ruling, work out two things: who scored, and whose hand/arm the ball touched.
 - If they are the SAME player, the goal is disallowed.
-- If they are DIFFERENT players (for example the ball deflected off an opponent's, a defender's, or a team-mate's hand/arm before a different player scored), the Laws of the Game do NOT give a ruling for that situation. In that case you must NOT say the goal is disallowed, does not count, or is a handball offence. Instead, say plainly that the Laws of the Game do not specify a ruling for that exact situation and suggest the user rephrase or check with a match official.`;
+- If they are DIFFERENT players (for example the ball deflected off an opponent's, a defender's, or a team-mate's hand/arm before a different player scored), the Laws of the Game do NOT give a ruling for that situation. In that case you must NOT say the goal is disallowed, does not count, or is a handball offence. Instead, say plainly that the Laws of the Game do not specify a ruling for that exact situation and suggest the user rephrase or check with a match official.
+
+Completeness — when a question has multiple parts or more than one provided document is directly relevant:
+Before answering, check whether more than one provided document applies to the question. If so, address every one of them, not just the single most obviously relevant one — an answer that silently omits a relevant rule is incorrect even if the part it does cover is accurate. This can mean your answer needs more than the usual few sentences; when multiple rules genuinely apply, prioritize completeness over brevity.`;
 
 export type AnswerEvent =
   | { type: "text"; delta: string }
