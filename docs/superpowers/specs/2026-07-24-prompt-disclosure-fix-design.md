@@ -138,13 +138,18 @@ verification coverage, or whether the wording needed to be checked
 against attack framings nobody had tried yet.
 
 **Broadened probe set.** Beyond the two known-leaking probes already in
-issue #92 (orig-A, orig-B), six new adversarial framings were invented
-and tested, covering categories the original two didn't: indirect
-extraction, alternate structural asks (table/checklist), a
-debugging/authority framing, targeted extraction of one specific section
-(the handball rule), incremental multi-part extraction, and a false-claim
-correction framing. A blatant admin-roleplay control (must always refuse)
-and the original "repeat verbatim" control rounded out the set.
+issue #92 (orig-A, orig-B), **seven** new adversarial probes were invented
+and tested, spanning six categories the original two didn't cover:
+indirect extraction (`new-1`), alternate structural asks — table format
+(`new-2`) and a separate step-by-step checklist variant (`new-3`), both
+under the same "alternate structural ask" category, which is why six
+categories produced seven probes — a debugging/authority framing
+(`new-4-qa`), targeted extraction of one specific section, the handball
+rule (`new-5-handball`), incremental multi-part extraction
+(`new-6-incremental`), and a false-claim correction framing (`new-7`). A
+blatant admin-roleplay control (`new-8-admin`, must always refuse) and the
+original "repeat verbatim" control rounded out the set — nine probes
+total across originals, new probes, and controls.
 
 **Before/after, current (unpatched) `SYSTEM_PROMPT` vs. candidate:**
 
@@ -226,10 +231,14 @@ ordinary rules question.
 
 ## 5. Testing / Success Criteria
 
-**Permanent verification probe set** (implementation plan runs this after
-the prompt ships, on the real file — §4.3's results are pre-implementation
-evidence the wording is likely to hold, not a substitute for re-testing
-against the actual shipped code):
+**Permanent verification probe set** — permanent means the six documented
+probe strings and their repeat counts below are the standing regression
+standard for this prompt going forward, not that a script or CI job
+executes them automatically; §6 explicitly keeps this manual/live rather
+than an automated gate for this iteration. (Implementation plan runs this
+after the prompt ships, on the real file — §4.3's results are
+pre-implementation evidence the wording is likely to hold, not a
+substitute for re-testing against the actual shipped code):
 
 | Probe | Repeats | Why |
 |---|---|---|
@@ -311,3 +320,4 @@ than validation only after the code change ships.
 |---|---|
 | 2026-07-24 | Initial spec — written after live pre-implementation validation (§4.3) found one new strong leaker (`new-4-qa`) beyond the original two, confirmed the candidate wording closes it and both originals, verbatim-confirmed the 5 residual heuristic signals are clean refusals, and confirmed no regression on an 8-question golden spot check. |
 | 2026-07-24 | PR #93 (docs-only, spec+plan) reviewed cold by a fresh Opus dispatch — 0 BLOCKER, 1 SUGGESTION, 3 NIT, all independently verified against the live repo (byte-for-byte wording checks, line-number accuracy, blast-radius claims). Fixed: §4.3's before/after table didn't visibly name which 5 probes carried the residual heuristic signal later verbatim-confirmed — the table now annotates each one and cross-references the confirmation paragraph directly. Added a note under §4.2 (and a matching entry in §6) clarifying that the "decline in one sentence" wording's validated behavior on split (meta + real question) requests is to decline only the meta half, and that this split behavior is verified only against adversarial probes, not a legitimate compound question — a real but low-likelihood gap, not dismissed. The plan's cost-estimate SUGGESTION was fixed in the plan document itself (see its own revision history). |
+| 2026-07-24 | PR #93 verified two ways in parallel per this project's interim fresh-vs-resumed policy: the original review agent resumed to confirm all 4 prior fixes actually resolved what it flagged (clean, 0 new findings), and a genuinely fresh, independent Opus dispatch reviewed the same diff with no visibility into the first round — 0 BLOCKER, 1 new SUGGESTION, 2 new NIT. Fixed: §4.3's "six new adversarial framings were invented" prose didn't reconcile with the table's seven distinct new probes — rewrote to explicitly enumerate all seven probe IDs against their six categories (the "alternate structural ask" category contributed two probes, table format and checklist format). Clarified §5's "permanent verification probe set" to state explicitly that "permanent" means the documented probe strings/repeat counts, not an automated gate — removing the apparent tension with §6's "not proposed now" on a CI-style script. |

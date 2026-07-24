@@ -12,10 +12,10 @@ stronger than either of the two probes issue #92 was originally filed on.
 **Architecture:** One prompt-only edit to `lib/answer.ts` (Task 1), plus a
 live verification pass (Task 2) that runs the six-probe adversarial set
 from spec §5 against the shipped code, then confirms no regression on the
-existing eval suite (golden, paraphrase, hedge, escalation-bar). No new
-application code paths, no new eval-harness code — the verification script
-is disposable (per spec §6, a permanent CI-style probe gate is explicitly
-not proposed in this iteration).
+existing eval suite (golden, paraphrase, compound, hedge, escalation-bar).
+No new application code paths, no new eval-harness code — the
+verification script is disposable (per spec §6, a permanent CI-style
+probe gate is explicitly not proposed in this iteration).
 
 **Tech Stack:** TypeScript, the Anthropic SDK (`@anthropic-ai/sdk`), Voyage
 AI embeddings — same stack as the rest of this project, no new
@@ -292,3 +292,4 @@ Task 3 Step 4 for the precedent this follows):
 |---|---|
 | 2026-07-24 | Initial plan. |
 | 2026-07-24 | PR #93 reviewed cold by a fresh Opus dispatch — 0 BLOCKER, 1 SUGGESTION, 3 NIT. Fixed: Task 2's cost-estimate callout didn't sum to its own stated total (99 itemized vs. "136 more calls" claimed) and omitted the informational compound generation set (21 calls) that `npm run eval -- --generation` runs unconditionally — corrected to ~157 total calls with the full itemization shown. Added an expectation line for the compound-set output in Step 4's read-criteria (previously only the escalation-bar subset had a stated target). Added a "known gap" note after the false-decline spot-check describing that the check doesn't cover a legitimate compound question mixing rule vocabulary with a real meta-sounding phrase — a real but low-priority gap, not a blocker. |
+| 2026-07-24 | PR #93 verified two ways in parallel (resumed original reviewer + genuinely fresh independent Opus dispatch) — resumed round confirmed all 4 prior fixes clean with 0 new findings; fresh round found 0 BLOCKER, 1 new SUGGESTION (spec-side, fixed in the spec's own revision history), and 1 new NIT on this file: the Architecture summary's regression-tier list omitted the full compound set that Task 2 Step 4 actually reads and the cost callout counts — added "compound" to the list. |
