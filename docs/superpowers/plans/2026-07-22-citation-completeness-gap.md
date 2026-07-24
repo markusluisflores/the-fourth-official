@@ -8,7 +8,11 @@ permanent eval gate that measures whether the fix actually holds — and stop
 at a clear decision point rather than iterating prompt wording ad hoc.
 
 **Architecture:** Two independent, additive changes: (1) a new trailing
-"Completeness" section appended to `SYSTEM_PROMPT` in `lib/answer.ts`; (2) a
+"Covering every relevant rule" section appended to `SYSTEM_PROMPT` in
+`lib/answer.ts` (this project's own final wording, revised once during
+execution — see the spec's §4.2.1.2 and revision history; the plan's Task 1
+below still shows the originally-drafted "Completeness" wording as the
+historical record of what was executed first); (2) a
 new async filter + a new `--generation`-mode section in `evals/run-evals.ts`
 that isolates the generation-completeness signal from the separate,
 already-known retrieval-depth limitation, and threads the existing
@@ -131,6 +135,15 @@ EOF
 )"
 ```
 
+**Superseded 2026-07-23 — this task's wording did not hold up.** Task 3's
+live verification found this exact prompt insufficient (escalation bar
+stayed at 1/5). It was replaced with a different, better-performing
+wording after a dispatched Opus design consultation. The historical task
+text above is preserved as originally written and executed; **the actual
+shipped prompt is in `lib/answer.ts` and recorded in the spec's §4.2.1.2**
+— do not treat the Step 2 code block above as the current source of
+truth for what `SYSTEM_PROMPT` actually contains.
+
 ---
 
 ### Task 2: Eval harness — retrieval-complete filter + escalation-bar check
@@ -231,6 +244,7 @@ async function runGenerationCompoundSetFiltered(
       `(aggregate pass rate across all runs: ${totalFull}/${totalRuns})`,
   );
 }
+```
 
 **Second fix applied after PR #85's second review round (fresh Opus retry,
 2026-07-22):** added `totalRuns`/`totalFull` aggregate tracking above —
@@ -248,7 +262,13 @@ answers, not a new risk this fix introduces; and a NIT correcting the
 prior round's "byte-identical" claim about the two doc-comments (the
 executable code matches exactly, the comments had one small wording
 difference, since synced).
-```
+
+**Third fix applied during Task 2's implementation (2026-07-23):** this
+paragraph itself was sitting inside the unclosed code fence above until
+the implementer flagged it as a concern — the closing ` ``` ` had been
+left after this prose instead of right after the function's closing
+brace. Moved the fence to close immediately after the code; no code
+content changed, markdown-authoring fix only.
 
 **Fix applied after PR #85 review (fresh Opus dispatch, 2026-07-22):** the
 `if (filtered.length === 0)` early return above wasn't in the originally
@@ -345,13 +365,17 @@ against the live Supabase/Voyage/Anthropic stack and records the result.
   treated escalation/close decisions.
 
 > ⚠️ **Real cost and time, real API calls — confirm with Markus before
-> running.** This is roughly 100 paid Anthropic (Haiku 4.5) calls (golden
-> 32 + paraphrase 10 + informational compound 16 + filtered subset ~5×3 +
-> hedge 9×3 — corrected 2026-07-22, PR #85 review: the original ~200
-> estimate double-counted), roughly $0.50-1 CAD, ~5-10 minutes wall-clock.
-> Re-confirm with Markus immediately before running rather than assuming
-> an earlier discussion is still an active go-ahead. Do not run this step
-> unattended as part of an unsupervised task chain.
+> running.** At plan-authoring time this was estimated at roughly 100 paid
+> Anthropic (Haiku 4.5) calls (golden 32 + paraphrase 10 + informational
+> compound 16 + filtered subset ~5×3 + hedge 9×3 — corrected 2026-07-22,
+> PR #85 review: the original ~200 estimate double-counted), roughly
+> $0.50-1 CAD, ~5-10 minutes wall-clock. **Superseded 2026-07-23:** the
+> question set grew during execution (16 → 21 entries, filtered subset
+> 5 → 10 — see the spec's §7), so the real final run was closer to ~120
+> calls, same order of magnitude. Re-confirm with Markus immediately
+> before running rather than assuming an earlier discussion is still an
+> active go-ahead. Do not run this step unattended as part of an
+> unsupervised task chain.
 
 - [ ] **Step 1: Confirm `ANTHROPIC_API_KEY` is set**
 
@@ -366,8 +390,9 @@ that precede the `--generation` branch's own guard).
 Run: `npm run eval -- --generation --repeat=3`
 
 This runs, in order: golden (32 questions, 1 pass each), paraphrase (10
-questions, 1 pass each), the existing informational compound tier (16
-questions, 1 pass each), the new escalation-bar subset from Task 2 (only
+questions, 1 pass each), the informational compound tier (16 questions at
+plan-authoring time; 21 after the 2026-07-23 expansion — see spec §7, 1
+pass each), the new escalation-bar subset from Task 2 (only
 the retrieval-complete questions, 3 passes each), and the hedge set (9
 questions, 3 passes each — issue #65's regression suite).
 
