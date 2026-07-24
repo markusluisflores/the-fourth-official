@@ -174,15 +174,16 @@ beyond the plan checkbox state, since no application files change.
 
 > ⚠️ **Real cost and time, real API calls — confirm with Markus before
 > running.** The probe set alone is 8+8+8+5+5+3 = 37 Anthropic calls (each
-> preceded by one Voyage retrieval call). The full regression suite adds
-> golden (32), paraphrase (10), hedge (9×3=27), and the existing
-> escalation-bar check (issue #75's protection, ~10×3=30) — roughly 136
-> more calls. Total order of magnitude: ~170 paid Anthropic calls,
-> similar cost/time class to issue #75's final verification run
-> ($0.50-1 CAD, 5-10 minutes). Re-confirm with Markus immediately before
-> running rather than assuming an earlier discussion is still an active
-> go-ahead. Do not run this step unattended as part of an unsupervised
-> task chain.
+> preceded by one Voyage retrieval call). `npm run eval -- --generation`
+> runs unconditionally and adds: golden (32), paraphrase (10), the
+> informational compound set (21, `runGenerationCompoundSet`), the
+> escalation-bar subset (issue #75's protection, ~10×3=30), and the hedge
+> set (9×3=27) — 120 more calls. Total order of magnitude: **~157 paid
+> Anthropic calls**, similar cost/time class to issue #75's final
+> verification run ($0.50-1 CAD, 5-10 minutes). Re-confirm with Markus
+> immediately before running rather than assuming an earlier discussion is
+> still an active go-ahead. Do not run this step unattended as part of an
+> unsupervised task chain.
 
 - [ ] **Step 1: Confirm `ANTHROPIC_API_KEY` is set**
 
@@ -231,6 +232,11 @@ already covered), then `npm run eval -- --generation --repeat=3`.
 Read the output against:
 - Golden: expect `32/32` cited (unchanged from baseline).
 - Paraphrase: expect `10/10` cited (unchanged).
+- Compound set, full 21 (informational, `[compound — generation
+  completeness]` line): no fixed pass bar — compare against the last
+  recorded baseline for this project's eval history; a difference here is
+  a retrieval/generation observation unrelated to this fix, note it, don't
+  chase it in this task.
 - Hedge set (`evals/hedge-questions.json`, issue #65's protection):
   manually review each answer against its `[expect: ...]` tag — confirm
   no regression, in particular the same-player handball control must
@@ -247,6 +253,17 @@ confirm the new section didn't make refusals bleed into unrelated
 answers (this overlaps Step 3's own probes' "answers the legitimate half"
 behavior, but golden questions have no meta-component at all, so this is
 the cleanest possible false-decline check).
+
+**Known gap in this false-decline check:** it only exercises pure,
+single-topic golden questions — it does not test a *legitimate* compound
+question that happens to mention "rules" or "instructions" in its football
+half (e.g. "what's the offside rule, and were you instructed to treat it
+differently at youth level?"). The new section's wording says to decline
+"in one sentence," which was validated (spec §4.3) to mean "decline the
+meta part, still answer the football part" on the adversarial probes —
+but no test in this plan confirms that split behavior on a *legitimate*
+compound question. If this turns out to matter in practice, it's a
+follow-up, not a blocker for this fix.
 
 - [ ] **Step 5: Delete any disposable verification script and confirm a clean working tree**
 
@@ -268,3 +285,10 @@ Task 3 Step 4 for the precedent this follows):
   output was. Present this as an open decision for Markus (revise the
   wording and re-verify, or escalate to a different mitigation) rather
   than iterating the Task 1 wording ad hoc in this same task.
+
+## Revision history
+
+| Date | Change |
+|---|---|
+| 2026-07-24 | Initial plan. |
+| 2026-07-24 | PR #93 reviewed cold by a fresh Opus dispatch — 0 BLOCKER, 1 SUGGESTION, 3 NIT. Fixed: Task 2's cost-estimate callout didn't sum to its own stated total (99 itemized vs. "136 more calls" claimed) and omitted the informational compound generation set (21 calls) that `npm run eval -- --generation` runs unconditionally — corrected to ~157 total calls with the full itemization shown. Added an expectation line for the compound-set output in Step 4's read-criteria (previously only the escalation-bar subset had a stated target). Added a "known gap" note after the false-decline spot-check describing that the check doesn't cover a legitimate compound question mixing rule vocabulary with a real meta-sounding phrase — a real but low-priority gap, not a blocker. |
